@@ -1,0 +1,8 @@
+# Ignore all object files
+*.o
+
+# Ignore all files in the bin folder (executables)
+bin/*
+
+# Allow the bin folder itself to be tracked
+!bin/

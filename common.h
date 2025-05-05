@@ -1,4 +1,4 @@
-// common.h
+// Ajouter dans common.h
 #ifndef COMMON_H
 #define COMMON_H
 
@@ -11,9 +11,14 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <errno.h>  // Ajouté pour les codes d'erreur comme EAGAIN
 
 #define MAX_MSG_SIZE 1024
 #define SERVER_PORT 8888
+
+// Ajouter ces déclarations
+extern int global_socket_fd;  // Socket globale pour la gestion du signal
+extern volatile sig_atomic_t running;
 
 // Types de requêtes
 typedef enum {
@@ -34,9 +39,6 @@ typedef struct {
 // Fonction pour initialiser une requête
 void init_request(Request *req, RequestType type, const char *sender, 
                   const char *recipient, const char *content);
-
-// Variable globale pour la gestion des signaux
-extern volatile sig_atomic_t running;
 
 // Gestionnaire de signal pour SIGINT
 void handle_sigint(int sig);

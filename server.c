@@ -9,6 +9,18 @@ int init_server(Server *server) {
         return -1;
     }
     
+    // Enregistrer la socket globalement pour le gestionnaire de signal
+    global_socket_fd = server->socket_fd;
+    
+    // Configurer timeout sur la socket pour permettre la vérification de running
+    struct timeval tv;
+    tv.tv_sec = 1;  // 1 seconde
+    tv.tv_usec = 0;
+    if (setsockopt(server->socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        perror("Erreur lors de la configuration du timeout");
+        // Non fatal, continuer
+    }
+    
     // Configurer l'adresse du serveur
     memset(&server->server_addr, 0, sizeof(server->server_addr));
     server->server_addr.sin_family = AF_INET;
@@ -230,9 +242,18 @@ void *receive_messages_thread(void *arg) {
                                    (struct sockaddr*)&client_addr, &client_len);
         
         if (received < 0) {
-            if (running) {
-                perror("Erreur lors de la réception de la requête");
+            // Si running est à 0, on termine la boucle
+            if (!running) {
+                break;
             }
+            
+            // Si c'est un timeout, on continue la boucle
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
+            
+            // Sinon, c'est une vraie erreur
+            perror("Erreur lors de la réception de la requête");
             continue;
         }
         
@@ -240,11 +261,12 @@ void *receive_messages_thread(void *arg) {
         process_request(server, &req, &client_addr);
     }
     
+    printf("Thread de réception du serveur terminé.\n");
     return NULL;
 }
 
 // Fonction principale
-int main(int argc, char *argv[]) {
+int main(void) {  // Suppression des paramètres inutilisés
     Server server;
     
     // Initialiser le serveur
@@ -253,6 +275,7 @@ int main(int argc, char *argv[]) {
     }
     
     printf("Serveur démarré sur le port %d\n", SERVER_PORT);
+    printf("Appuyez sur Ctrl+C pour arrêter le serveur.\n");
     
     // Créer le thread principal de réception
     pthread_t receive_thread;
@@ -264,14 +287,26 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
     
-    // Attendre que le thread se termine
+    // Attendre que le thread se termine (lorsque running devient 0)
     pthread_join(receive_thread, NULL);
+    
+    // Envoyer un message de fermeture à tous les clients
+    Request shutdown_notice;
+    init_request(&shutdown_notice, REQ_MESSAGE, "Server", "", "Le serveur est en train de s'arrêter.");
+    
+    pthread_mutex_lock(&server.clients_mutex);
+    for (int i = 0; i < server.client_count; i++) {
+        if (server.clients[i].connected) {
+            send_response(&server, &shutdown_notice, &server.clients[i].addr);
+        }
+    }
+    pthread_mutex_unlock(&server.clients_mutex);
     
     // Nettoyage
     close(server.socket_fd);
     pthread_mutex_destroy(&server.clients_mutex);
     
-    printf("Serveur arrêté.\n");
+    printf("Serveur arrêté proprement.\n");
     
     return EXIT_SUCCESS;
 }

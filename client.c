@@ -1,5 +1,6 @@
 // client.c
 #include "client.h"
+#include <errno.h>
 
 int init_client(Client *client, const char *server_ip) {
     // Créer la socket UDP
@@ -7,6 +8,18 @@ int init_client(Client *client, const char *server_ip) {
     if (client->socket_fd < 0) {
         perror("Erreur lors de la création de la socket");
         return -1;
+    }
+    
+    // Enregistrer la socket globalement pour le gestionnaire de signal
+    global_socket_fd = client->socket_fd;
+    
+    // Configurer timeout sur la socket
+    struct timeval tv;
+    tv.tv_sec = 1;  // 1 seconde
+    tv.tv_usec = 0;
+    if (setsockopt(client->socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        perror("Erreur lors de la configuration du timeout");
+        // Non fatal, continuer
     }
     
     // Configurer l'adresse du serveur
@@ -99,23 +112,33 @@ void *receive_message_thread(void *arg) {
     Request response;
     socklen_t server_len = sizeof(client->server_addr);
     
-    // Boucle pour recevoir des messages
     while (running) {
-        // Recevoir une réponse du serveur
         ssize_t received = recvfrom(client->socket_fd, &response, sizeof(Request), 0,
-                                   (struct sockaddr*)&client->server_addr, &server_len);
+                                  (struct sockaddr*)&client->server_addr, &server_len);
         
         if (received < 0) {
-            if (running) {
-                perror("Erreur lors de la réception de la réponse");
+            // Si running est à 0, on termine la boucle
+            if (!running) {
+                break;
             }
+            
+            // Si c'est un timeout, on continue la boucle
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
+            
+            // Sinon, c'est une vraie erreur
+            perror("Erreur lors de la réception de la réponse");
             continue;
         }
         
-        // Afficher le message reçu
-        printf("[%s] %s\n", response.sender, response.content);
+        // Traitement normal...
+        printf("\r[%s] %s\n", response.sender, response.content);
+        printf("Vous: ");
+        fflush(stdout);
     }
     
+    printf("Thread de réception terminé.\n");
     return NULL;
 }
 

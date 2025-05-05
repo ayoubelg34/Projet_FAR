@@ -2,6 +2,7 @@
 #include "common.h"
 
 volatile sig_atomic_t running = 1;
+int global_socket_fd = -1;  // Initialisation de la variable globale
 
 void init_request(Request *req, RequestType type, const char *sender, 
                   const char *recipient, const char *content) {
@@ -18,6 +19,11 @@ void init_request(Request *req, RequestType type, const char *sender,
 }
 
 void handle_sigint(int sig) {
+    printf("\nInterruption reçue (signal %d). Arrêt en cours...\n", sig);
     running = 0;
-    printf("\nArrêt en cours...\n");
+    
+    // Fermer la socket globale si elle existe
+    if (global_socket_fd >= 0) {
+        close(global_socket_fd);
+    }
 }
