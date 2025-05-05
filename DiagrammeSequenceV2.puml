@@ -1,0 +1,65 @@
+@startuml
+!theme plain
+
+box "Client 1" #LightBlue
+participant "Client 1\nUI" as C1
+participant "Thread Envoi\nClient 1" as C1S
+participant "Thread Réception\nClient 1" as C1R
+end box
+
+box "Client 2" #LightGreen
+participant "Client 2\nUI" as C2
+participant "Thread Envoi\nClient 2" as C2S
+participant "Thread Réception\nClient 2" as C2R
+end box
+
+box "Serveur" #LightYellow
+participant "Thread Réception\nUDP" as SR
+participant "Thread Traitement\nMessages" as ST
+end box
+
+box "Client N" #LightPink
+participant "Client N\nUI" as CN
+participant "Thread Envoi\nClient N" as CNS
+participant "Thread Réception\nClient N" as CNR
+end box
+
+== Initialisation Réseau ==
+C1 -> C1S : Crée thread
+C1 -> C1R : Crée thread
+C1S -> SR : UDP: Initialisation (ID Client 1)
+SR -> ST : Enregistre client
+ST -> C1R : UDP: ACK enregistrement
+
+C2 -> C2S : Crée thread
+C2 -> C2R : Crée thread
+C2S -> SR : UDP: Initialisation (ID Client 2)
+SR -> ST : Enregistre client
+ST -> C2R : UDP: ACK enregistrement
+
+CN -> CNS : Crée thread
+CN -> CNR : Crée thread
+CNS -> SR : UDP: Initialisation (ID Client N)
+SR -> ST : Enregistre client
+ST -> CNR : UDP: ACK enregistrement
+
+== Communication Client 1 vers Client 2 ==
+C1 -> C1S : Message pour Client 2
+C1S -> SR : UDP: Message pour Client 2
+SR -> ST : Ajoute à la file
+ST -> C1R : UDP: ACK message reçu
+ST -> C2R : UDP: Transmet message de Client 1
+C2R -> C2 : Affiche message
+C2R -> ST : UDP: ACK message reçu
+
+== Communication Client N vers tous ==
+CN -> CNS : Message broadcast
+CNS -> SR : UDP: Message pour tous
+SR -> ST : Ajoute à la file
+ST -> CNR : UDP: ACK message reçu
+ST -> C1R : UDP: Transmet message de Client N
+C1R -> C1 : Affiche message
+ST -> C2R : UDP: Transmet message de Client N
+C2R -> C2 : Affiche message
+
+@enduml

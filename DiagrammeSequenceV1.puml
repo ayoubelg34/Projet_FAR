@@ -1,0 +1,43 @@
+@startuml
+!theme plain
+
+actor "Client 1" as C1
+actor "Serveur" as S
+actor "Client 2" as C2
+
+box "Phase d'initialisation" #LightBlue
+C1 -> S : UDP: Initialisation (ID Client 1)
+activate C1
+activate S
+note right of S: Enregistre Client 1
+S --> C1 : UDP: ACK enregistrement
+
+C2 -> S : UDP: Initialisation (ID Client 2)
+activate C2
+note right of S: Enregistre Client 2
+S --> C2 : UDP: ACK enregistrement
+end box
+
+box "Structure Multi-thread/process" #LightGreen
+note over C1: Crée threads\nenvoi/réception
+
+note over C2: Crée threads\nenvoi/réception
+
+note over S: Thread\nréception UDP
+
+note over S: Thread traitement\nmessages
+end box
+
+box "Communication par messages" #LightYellow
+C1 -> S : UDP: Message pour Client 2
+note right of S: Traite le message
+S --> C1 : UDP: ACK message reçu
+
+S -> C2 : UDP: Transmet message de Client 1
+C2 --> S : UDP: ACK message reçu
+end box
+
+deactivate C1
+deactivate S
+deactivate C2
+@enduml
