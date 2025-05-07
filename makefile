@@ -1,26 +1,38 @@
 # Makefile
-CC=gcc
-CFLAGS=-Wall -Wextra -pthread
-LDFLAGS=-pthread
+CC = gcc
+CFLAGS = -Wall -Wextra -pthread
+LDFLAGS = -pthread
+OBJDIR = bin
+BINDIR = bin
 
-all: client server
+# Object files in bin/
+OBJS_CLIENT = $(OBJDIR)/client.o $(OBJDIR)/common.o
+OBJS_SERVER = $(OBJDIR)/server.o $(OBJDIR)/common.o
 
-common.o: common.c common.h
-	$(CC) $(CFLAGS) -c common.c -o common.o
+all: $(BINDIR)/client $(BINDIR)/server
 
-client.o: client.c client.h common.h
-	$(CC) $(CFLAGS) -c client.c -o client.o
+# Ensure bin/ exists before compiling
+$(OBJDIR):
+	mkdir -p $(OBJDIR)
 
-server.o: server.c server.h common.h
-	$(CC) $(CFLAGS) -c server.c -o server.o
+# Compile object files into bin/
+$(OBJDIR)/common.o: common.c common.h | $(OBJDIR)
+	$(CC) $(CFLAGS) -c common.c -o $@
 
-client: client.o common.o
-	$(CC) $(LDFLAGS) client.o common.o -o client
+$(OBJDIR)/client.o: client.c client.h common.h | $(OBJDIR)
+	$(CC) $(CFLAGS) -c client.c -o $@
 
-server: server.o common.o
-	$(CC) $(LDFLAGS) server.o common.o -o server
+$(OBJDIR)/server.o: server.c server.h common.h | $(OBJDIR)
+	$(CC) $(CFLAGS) -c server.c -o $@
+
+# Link executables into bin/
+$(BINDIR)/client: $(OBJS_CLIENT)
+	$(CC) $(LDFLAGS) $^ -o $@
+
+$(BINDIR)/server: $(OBJS_SERVER)
+	$(CC) $(LDFLAGS) $^ -o $@
 
 clean:
-	rm -f *.o client server
+	rm -f $(OBJDIR)/*.o $(BINDIR)/client $(BINDIR)/server
 
 .PHONY: all clean
