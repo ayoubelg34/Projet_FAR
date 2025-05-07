@@ -2,6 +2,12 @@
 #include "client.h"
 #include <errno.h>
 
+// External variables defined in common.c
+extern volatile sig_atomic_t running;
+extern int global_socket_fd;
+
+// Signal handler is defined in common.c
+
 int init_client(Client *client, const char *server_ip) {
     // Créer la socket UDP
     client->socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -33,8 +39,8 @@ int init_client(Client *client, const char *server_ip) {
         return -1;
     }
     
-    // Configuration du gestionnaire de signal pour CTRL+C
-    signal(SIGINT, handle_sigint);
+    // Le gestionnaire de signal est déjà configuré dans common.c
+    // Pas besoin de réinitialiser ici
     
     return 0;
 }
@@ -79,8 +85,15 @@ void *send_message_thread(void *arg) {
     
     // Boucle pour envoyer des messages
     while (running) {
+        // Prompt utilisateur
+        printf("Vous: ");
+        fflush(stdout);
+        
         // Lire l'entrée utilisateur
         if (fgets(buffer, MAX_MSG_SIZE, stdin) == NULL) {
+            if (!running) {  // Si interruption causée par le signal
+                break;
+            }
             continue;
         }
         
@@ -134,7 +147,6 @@ void *receive_message_thread(void *arg) {
         
         // Traitement normal...
         printf("\r[%s] %s\n", response.sender, response.content);
-        printf("Vous: ");
         fflush(stdout);
     }
     
