@@ -123,6 +123,7 @@ void *send_message_thread(void *arg) {
 void *receive_message_thread(void *arg) {
     Client *client = (Client *)arg;
     Request response;
+    Request ack_response;
     socklen_t server_len = sizeof(client->server_addr);
     
     while (running) {
@@ -148,6 +149,13 @@ void *receive_message_thread(void *arg) {
         // Traitement normal...
         printf("\r[%s] %s\n", response.sender, response.content);
         fflush(stdout);
+
+        if (strcmp(response.sender, "Server") == 0 && 
+            strstr(response.content, "a quitté le chat") != NULL) {
+            init_request(&ack_response, REQ_MESSAGE, client->username, 
+                         "Server", "ACK notification déconnexion");
+            send_request(client, &ack_response);
+        }
     }
     
     printf("Thread de réception terminé.\n");
@@ -206,6 +214,20 @@ int main(int argc, char *argv[]) {
     
     // Attendre que les threads se terminent
     pthread_join(send_thread, NULL);
+
+    if (running) {
+        Request req;
+        init_request(&req, REQ_DISCONNECT, client.username, "", "Déconnexion explicite");
+        send_request(&client, &req);
+        
+        // Attendre un peu pour laisser le temps au serveur de traiter la déconnexion
+        usleep(500000);  // 500ms
+        
+        // Arrêter le thread de réception
+        running = 0;
+    }
+
+
     pthread_join(receive_thread, NULL);
     
     // Fermer la socket

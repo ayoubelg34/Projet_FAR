@@ -178,6 +178,10 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
             remove_client(server, req->sender);
             printf("Client déconnecté: %s\n", req->sender);
             
+            // Envoyer un ACK de déconnexion au client
+            init_request(&response, REQ_MESSAGE, "Server", req->sender, "Déconnexion confirmée");
+            send_response(server, &response, client_addr);
+            
             // Annoncer la déconnexion aux autres clients
             char announce[100];
             sprintf(announce, "%s a quitté le chat", req->sender);
