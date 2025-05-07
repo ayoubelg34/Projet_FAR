@@ -37,6 +37,20 @@ S -> C2 : UDP: Transmet message de Client 1
 C2 --> S : UDP: ACK message reçu
 end box
 
+box "Phase de déconnexion" #LightPink
+C1 -> S : UDP: Déconnexion (ID Client 1)
+note right of S: Marque Client 1\ncomme déconnecté
+S --> C1 : UDP: ACK déconnexion
+
+S -> C2 : UDP: Notification déconnexion Client 1
+note over C2: Affiche message\ndéconnexion
+C2 --> S : UDP: ACK notification reçue
+
+note over C1: Arrêt des threads\nenvoi/réception
+
+note over C1: Fermeture socket
+end box
+
 deactivate C1
 deactivate S
 deactivate C2

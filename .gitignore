@@ -6,3 +6,5 @@ bin/*
 
 # Allow the bin folder itself to be tracked
 !bin/
+
+.DS_Store
