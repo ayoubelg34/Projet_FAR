@@ -10,7 +10,8 @@ static Command commands[] = {
     {"ping", cmd_ping, "Test de connectivité avec le serveur"},
     {"msg", cmd_msg, "Envoie un message privé (@msg <user> <message>)"},
     {"credits", cmd_credits, "Affiche les crédits de l'application"},
-    {"shutdown", cmd_shutdown, "Arrête le serveur (admin uniquement)"}
+    {"shutdown", cmd_shutdown, "Arrête le serveur (admin uniquement)"},
+    {"list", cmd_list, "Affiche la liste des utilisateurs connectés"}  // NOUVELLE COMMANDE
 };
 
 static int command_count = sizeof(commands) / sizeof(Command);
@@ -82,6 +83,7 @@ char* read_file_content(const char *filename) {
     fclose(file);
     return content;
 }
+
 
 CommandResult process_command(Server *server, Request *req, struct sockaddr_in *client_addr) {
     char *cmd_name = get_command_name(req->content);
@@ -215,4 +217,41 @@ CommandResult cmd_shutdown(Server *server, Request *req, struct sockaddr_in *cli
     running = 0;
     
     return CMD_SHUTDOWN;
+}
+
+CommandResult cmd_list(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    Request response;
+    char message[MAX_MSG_SIZE];
+    strcpy(message, "Utilisateurs connectés:\n");
+    
+    pthread_mutex_lock(&server->clients_mutex);
+    
+    int connected_count = 0;
+    for (int i = 0; i < server->client_count; i++) {
+        if (server->clients[i].connected) {
+            char line[64];
+            sprintf(line, "- %s\n", server->clients[i].username);
+            
+            if (strlen(message) + strlen(line) < MAX_MSG_SIZE - 1) {
+                strcat(message, line);
+                connected_count++;
+            }
+        }
+    }
+    
+    if (connected_count == 0) {
+        strcpy(message, "Aucun utilisateur connecté");
+    } else {
+        char count_line[64];
+        sprintf(count_line, "\nTotal: %d utilisateur(s) connecté(s)", connected_count);
+        if (strlen(message) + strlen(count_line) < MAX_MSG_SIZE - 1) {
+            strcat(message, count_line);
+        }
+    }
+    
+    pthread_mutex_unlock(&server->clients_mutex);
+    
+    init_request(&response, REQ_MESSAGE, "Server", "", message);
+    send_response(server, &response, client_addr);
+    return CMD_SUCCESS;
 }
