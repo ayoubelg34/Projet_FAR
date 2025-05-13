@@ -49,6 +49,14 @@ int init_server(Server *server) {
     // Configuration du gestionnaire de signal pour CTRL+C
     signal(SIGINT, handle_sigint);
     
+    // Initialiser les salons
+    server->nb_salons = 0;
+    memset(server->salons, 0, sizeof(server->salons));
+    pthread_mutex_init(&server->salons_mutex, NULL);
+
+    // Charger les salons existants depuis un fichier
+    load_rooms(server, "rooms.txt");
+
     return 0;
 }
 
@@ -112,12 +120,20 @@ void remove_client(Server *server, const char *username) {
 }
 
 int send_response(Server *server, Request *res, struct sockaddr_in *client_addr) {
+    // Vérifier si la socket est encore valide
+    if (!running || server->socket_fd < 0) {
+        return -1;
+    }
+    
     // Envoyer la réponse au client
     ssize_t sent = sendto(server->socket_fd, res, sizeof(Request), 0,
                           (struct sockaddr*)client_addr, sizeof(struct sockaddr_in));
     
     if (sent < 0) {
-        perror("Erreur lors de l'envoi de la réponse");
+        // Ne pas afficher d'erreur si le serveur est en cours d'arrêt
+        if (running) {
+            perror("Erreur lors de l'envoi de la réponse");
+        }
         return -1;
     }
     
@@ -199,30 +215,50 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
         }
         
         case REQ_MESSAGE: {
-            // Diffuser le message à tous les clients
-            printf("Message de %s: %s\n", req->sender, req->content);
-            
-            pthread_mutex_lock(&server->clients_mutex);
-            for (int i = 0; i < server->client_count; i++) {
-                if (strcmp(server->clients[i].username, req->sender) != 0 && 
-                    server->clients[i].connected) {
-                    send_response(server, req, &server->clients[i].addr);
-                }
+            int idx = find_client_by_username(server, req->sender);
+            if (idx >= 0 && strlen(server->clients[idx].salon_courant) > 0) {
+                const char *salon = server->clients[idx].salon_courant;
+                printf("[%s] %s: %s\n", salon, req->sender, req->content);
+                broadcast_room(server, salon, req, req->sender);
+            } else {
+                init_request(&response, REQ_MESSAGE, "Server", req->sender,
+                            "Vous devez rejoindre un salon avant d'envoyer un message.");
+                send_response(server, &response, client_addr);
             }
-            pthread_mutex_unlock(&server->clients_mutex);
             break;
         }
+
         
         case REQ_COMMAND: {
-            // Traiter les commandes (à implémenter dans la partie 2)
-            printf("Commande de %s: %s\n", req->sender, req->content);
-            
-            // Répondre au client que la commande a été reçue
-            init_request(&response, REQ_MESSAGE, "Server", "", 
-                         "Commande reçue (traitement à implémenter)");
+            char *cmd = req->content;
+            printf("Commande reçue de %s: %s\n", req->sender, cmd);
+
+            if (strncmp(cmd, "@create ", 8) == 0) {
+                if (create_room(server, cmd + 8) == 0)
+                    init_request(&response, REQ_MESSAGE, "Server", "", "Salon créé avec succès.");
+                else
+                    init_request(&response, REQ_MESSAGE, "Server", "", "Erreur : salon existe déjà.");
+
+            } else if (strncmp(cmd, "@join ", 6) == 0) {
+                if (join_room(server, req->sender, cmd + 6) == 0)
+                    init_request(&response, REQ_MESSAGE, "Server", "", "Vous avez rejoint le salon.");
+                else
+                    init_request(&response, REQ_MESSAGE, "Server", "", "Erreur : salon introuvable ou plein.");
+
+            } else if (strcmp(cmd, "@leave") == 0) {
+                if (remove_user(server, req->sender, NULL) == 0)
+                    init_request(&response, REQ_MESSAGE, "Server", "", "Vous avez quitté le salon.");
+                else
+                    init_request(&response, REQ_MESSAGE, "Server", "", "Vous n'étiez dans aucun salon.");
+
+            } else {
+                init_request(&response, REQ_MESSAGE, "Server", "", "Commande inconnue.");
+            }
+
             send_response(server, &response, client_addr);
             break;
         }
+
         
         default:
             // Type de requête inconnu
@@ -269,6 +305,150 @@ void *receive_messages_thread(void *arg) {
     return NULL;
 }
 
+
+
+int find_room(Server *server, const char *name) {
+    for (int i = 0; i < server->nb_salons; i++) {
+        if (strcmp(server->salons[i].nom, name) == 0)
+            return i;
+    }
+    return -1;
+}
+
+int create_room(Server *server, const char *name) {
+    pthread_mutex_lock(&server->salons_mutex);
+    if (find_room(server, name) >= 0 || server->nb_salons >= MAX_SALONS) {
+        pthread_mutex_unlock(&server->salons_mutex);
+        return -1;
+    }
+    Salon *room = &server->salons[server->nb_salons++];
+    strncpy(room->nom, name, MAX_NOM_SALON - 1);
+    room->nb_membres = 0;
+    pthread_mutex_unlock(&server->salons_mutex);
+    return 0;
+}
+
+int join_room(Server *server, const char *username, const char *room_name) {
+    int idx = find_client_by_username(server, username);
+    if (idx < 0) return -1;
+
+    remove_user(server, username, NULL);
+
+    pthread_mutex_lock(&server->salons_mutex);
+    int rid = find_room(server, room_name);
+    if (rid < 0 || server->salons[rid].nb_membres >= MAX_MEMBRES) {
+        pthread_mutex_unlock(&server->salons_mutex);
+        return -1;
+    }
+
+    Salon *room = &server->salons[rid];
+    strncpy(room->membres[room->nb_membres++], username, 49);
+    pthread_mutex_unlock(&server->salons_mutex);
+
+    pthread_mutex_lock(&server->clients_mutex);
+    strncpy(server->clients[idx].salon_courant, room_name, MAX_NOM_SALON);
+    pthread_mutex_unlock(&server->clients_mutex);
+
+    return 0;
+}
+
+int remove_user(Server *server, const char *username, const char *room_name) {
+    int cid = find_client_by_username(server, username);
+    if (cid < 0) return -1;
+
+    const char *room = room_name ? room_name : server->clients[cid].salon_courant;
+    if (!room || strlen(room) == 0) return -1;
+
+    pthread_mutex_lock(&server->salons_mutex);
+    int rid = find_room(server, room);
+    if (rid < 0) {
+        pthread_mutex_unlock(&server->salons_mutex);
+        return -1;
+    }
+
+    Salon *s = &server->salons[rid];
+    for (int i = 0; i < s->nb_membres; i++) {
+        if (strcmp(s->membres[i], username) == 0) {
+            for (int j = i; j < s->nb_membres - 1; j++)
+                strcpy(s->membres[j], s->membres[j + 1]);
+            s->nb_membres--;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&server->salons_mutex);
+
+    pthread_mutex_lock(&server->clients_mutex);
+    server->clients[cid].salon_courant[0] = '\0';
+    pthread_mutex_unlock(&server->clients_mutex);
+
+    return 0;
+}
+
+void broadcast_room(Server *server, const char *room, Request *msg, const char *sender) {
+    int rid = find_room(server, room);
+    if (rid < 0) return;
+
+    Salon *r = &server->salons[rid];
+    pthread_mutex_lock(&server->clients_mutex);
+    for (int i = 0; i < r->nb_membres; i++) {
+        if (strcmp(r->membres[i], sender) != 0) {
+            int cid = find_client_by_username(server, r->membres[i]);
+            if (cid >= 0 && server->clients[cid].connected) {
+                send_response(server, msg, &server->clients[cid].addr);
+            }
+        }
+    }
+    pthread_mutex_unlock(&server->clients_mutex);
+}
+
+void save_rooms(Server *server, const char *filename) {
+    FILE *f = fopen(filename, "w");
+    if (!f) {
+        perror("Erreur ouverture fichier rooms.txt");
+        return;
+    }
+
+    pthread_mutex_lock(&server->salons_mutex);
+    for (int i = 0; i < server->nb_salons; i++) {
+        Salon *s = &server->salons[i];
+        if (s->nb_membres == 0) continue; // Ne sauvegarde que les salons avec au moins 1 membre
+
+        fprintf(f, "salon: %s\n", s->nom);
+        for (int j = 0; j < s->nb_membres; j++) {
+            fprintf(f, "membre: %s\n", s->membres[j]);
+        }
+    }
+    pthread_mutex_unlock(&server->salons_mutex);
+    fclose(f);
+}
+
+void load_rooms(Server *server, const char *filename) {
+    FILE *f = fopen(filename, "r");
+    if (!f) return;
+
+    char line[100];
+    Salon *current = NULL;
+
+    pthread_mutex_lock(&server->salons_mutex);
+    server->nb_salons = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "salon: ", 7) == 0) {
+            if (server->nb_salons >= MAX_SALONS) break;
+            current = &server->salons[server->nb_salons++];
+            sscanf(line + 7, "%49[^\n]", current->nom);
+            current->nb_membres = 0;
+        } else if (strncmp(line, "membre: ", 8) == 0 && current) {
+            if (current->nb_membres < MAX_MEMBRES) {
+                sscanf(line + 8, "%49[^\n]", current->membres[current->nb_membres++]);
+            }
+        }
+    }
+
+    pthread_mutex_unlock(&server->salons_mutex);
+    fclose(f);
+}
+
 // Fonction principale
 int main(void) {  // Suppression des paramètres inutilisés
     Server server;
@@ -290,8 +470,7 @@ int main(void) {  // Suppression des paramètres inutilisés
         pthread_mutex_destroy(&server.clients_mutex);
         return EXIT_FAILURE;
     }
-    
-    // Attendre que le thread se termine (lorsque running devient 0)
+      // Attendre que le thread se termine (lorsque running devient 0)
     pthread_join(receive_thread, NULL);
     
     // Envoyer un message de fermeture à tous les clients
@@ -305,10 +484,15 @@ int main(void) {  // Suppression des paramètres inutilisés
         }
     }
     pthread_mutex_unlock(&server.clients_mutex);
+
+    // Sauvegarder les salons avant de quitter
+    save_rooms(&server, "rooms.txt");
     
-    // Nettoyage
+    // Nettoyage - fermer la socket seulement après avoir envoyé tous les messages
     close(server.socket_fd);
+    global_socket_fd = -1; // Réinitialisation pour éviter une double fermeture
     pthread_mutex_destroy(&server.clients_mutex);
+    pthread_mutex_destroy(&server.salons_mutex);
     
     printf("Serveur arrêté proprement.\n");
     

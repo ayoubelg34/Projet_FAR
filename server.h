@@ -1,49 +1,61 @@
-// server.h
 #ifndef SERVER_H
 #define SERVER_H
 
 #include "common.h"
 #include <stdbool.h>
 
-#define MAX_CLIENTS 100
+#define MAX_CLIENTS     100
+#define MAX_SALONS      32
+#define MAX_MEMBRES     32
+#define MAX_NOM_SALON   50
 
-// Structure pour stocker les informations des clients connectés
+//Structure Client 
 typedef struct {
     char username[50];
     char password[50];
     struct sockaddr_in addr;
     bool connected;
+    char salon_courant[MAX_NOM_SALON]; // "" si aucun
 } ClientInfo;
 
-// Structure du serveur
+//Structure Salon
+typedef struct {
+    char nom[MAX_NOM_SALON];
+    char membres[MAX_MEMBRES][50]; // pseudos
+    int  nb_membres;
+} Salon;
+
+//Structure Server
 typedef struct {
     int socket_fd;
     struct sockaddr_in server_addr;
+
     ClientInfo clients[MAX_CLIENTS];
     int client_count;
     pthread_mutex_t clients_mutex;
+
+    Salon salons[MAX_SALONS];
+    int   nb_salons;
+    pthread_mutex_t salons_mutex;
 } Server;
 
-// Fonction pour initialiser le serveur
-int init_server(Server *server);
-
-// Thread principal pour recevoir des messages
+//Fonctions server
+int  init_server(Server *server);
 void *receive_messages_thread(void *arg);
-
-// Fonction pour traiter une requête
-void process_request(Server *server, Request *req, struct sockaddr_in *client_addr);
-
-// Fonction pour envoyer une réponse à un client
-int send_response(Server *server, Request *res, struct sockaddr_in *client_addr);
-
-// Fonction pour trouver un client par son nom d'utilisateur
-int find_client_by_username(Server *server, const char *username);
-
-// Fonction pour ajouter un client
-int add_client(Server *server, const char *username, const char *password, 
-               struct sockaddr_in *addr);
-
-// Fonction pour supprimer un client
+void  process_request(Server *server, Request *req, struct sockaddr_in *client_addr);
+int  send_response(Server *server, Request *res, struct sockaddr_in *client_addr);
+int  find_client_by_username(Server *server, const char *username);
+int  add_client(Server *server, const char *username, const char *password, 
+                struct sockaddr_in *addr);
 void remove_client(Server *server, const char *username);
+
+//Fonctions salon
+int create_room(Server *server, const char *name);
+int join_room(Server *server, const char *username, const char *room_name);
+int add_user(Server *server, const char *user, const char *room);
+int remove_user(Server *server, const char *user, const char *room);
+void broadcast_room(Server *server, const char *room, Request *msg, const char *sender);
+void save_rooms(Server *server, const char *file);
+void load_rooms(Server *server, const char *file);
 
 #endif /* SERVER_H */
