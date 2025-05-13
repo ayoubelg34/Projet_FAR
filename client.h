@@ -27,4 +27,7 @@ void *receive_message_thread(void *arg);
 // Fonction pour envoyer une requête
 int send_request(Client *client, Request *req);
 
-#endif /* CLIENT_H */   
+// Fonction pour recevoir un fichier via TCP avec un port spécifié
+int receive_file_with_port(const char *save_dir, const char *server_ip, int port);
+
+#endif /* CLIENT_H */

@@ -256,6 +256,92 @@ int receive_file(const char *save_dir, const char *server_ip) {
     return 0;
 }
 
+// Nouvelle fonction pour recevoir un fichier via TCP avec un port spécifié
+int receive_file_with_port(const char *save_dir, const char *server_ip, int port) {
+    int tcp_socket;
+    struct sockaddr_in server_addr;
+    FILE *file;
+    char buffer[1024];
+    ssize_t bytes_received;
+    
+    // Créer une socket TCP
+    tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcp_socket < 0) {
+        perror("Erreur lors de la création de la socket TCP");
+        return -1;
+    }
+    
+    // Configurer l'adresse du serveur avec le port spécifié
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    
+    if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
+        perror("Adresse IP invalide");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Se connecter au serveur
+    if (connect(tcp_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Erreur lors de la connexion TCP au serveur");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Recevoir le nom du fichier
+    char filename[256];
+    if ((bytes_received = recv(tcp_socket, filename, sizeof(filename), 0)) <= 0) {
+        perror("Erreur lors de la réception du nom de fichier");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Envoyer l'ACK au serveur
+    if (send(tcp_socket, "OK", 3, 0) < 0) {
+        perror("Erreur lors de l'envoi de l'ACK");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Construire le chemin complet du fichier
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), "%s/%s", save_dir, filename);
+    
+    // Ouvrir le fichier pour écriture
+    file = fopen(filepath, "wb");
+    if (file == NULL) {
+        perror("Erreur lors de la création du fichier");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Recevoir et écrire le contenu du fichier
+    while ((bytes_received = recv(tcp_socket, buffer, sizeof(buffer), 0)) > 0) {
+        if (fwrite(buffer, 1, (size_t)bytes_received, file) != (size_t)bytes_received) {
+            perror("Erreur lors de l'écriture dans le fichier");
+            fclose(file);
+            close(tcp_socket);
+            return -1;
+        }
+    }
+    
+    if (bytes_received < 0) {
+        perror("Erreur lors de la réception du fichier");
+        fclose(file);
+        close(tcp_socket);
+        return -1;
+    }
+    
+    printf("Fichier reçu avec succès: %s\n", filepath);
+    
+    // Fermer le fichier et la socket
+    fclose(file);
+    close(tcp_socket);
+    
+    return 0;
+}
+
 void *send_message_thread(void *arg) {
     Client *client = (Client *)arg;
     char buffer[MAX_MSG_SIZE];
@@ -350,13 +436,23 @@ void *receive_message_thread(void *arg) {
         if (response.type == REQ_COMMAND && strncmp(response.content, "@file_ready ", 12) == 0) {
             printf("\rNotification: Fichier prêt à être téléchargé. Lancement du téléchargement...\n");
             
+            // Extraire le nom du fichier et le port à utiliser
+            char filename[256];
+            int port = FILE_TRANSFER_PORT; // Port par défaut
+            
+            // Essayer d'obtenir le port personnalisé
+            if (sscanf(response.content, "@file_ready %255s %d", filename, &port) >= 1) {
+                printf("Téléchargement du fichier %s sur le port %d\n", filename, port);
+            }
+            
             // Télécharger le fichier
             char download_dir[256] = "./downloads"; // Dossier par défaut
             
             // Créer le dossier s'il n'existe pas
             mkdir(download_dir, 0755);
             
-            if (receive_file(download_dir, inet_ntoa(client->server_addr.sin_addr)) == 0) {
+            // Appeler la version modifiée de receive_file avec le port extrait
+            if (receive_file_with_port(download_dir, inet_ntoa(client->server_addr.sin_addr), port) == 0) {
                 printf("Fichier téléchargé avec succès dans %s\n", download_dir);
             }
             

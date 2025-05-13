@@ -269,11 +269,21 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
         return -1;
     }
     
-    // Configurer l'adresse du serveur
+    // Réutiliser l'adresse
+    int opt = 1;
+    if (setsockopt(tcp_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        perror("Erreur lors de la configuration de la socket TCP");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Configurer l'adresse du serveur avec un port éphémère (0)
+    // au lieu d'essayer de réutiliser FILE_TRANSFER_PORT
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_addr.sin_port = htons(FILE_TRANSFER_PORT);
+    server_addr.sin_port = htons(0); // Port éphémère
     
     // Lier la socket à l'adresse
     if (bind(tcp_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
@@ -283,6 +293,16 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
         return -1;
     }
     
+    // Obtenir le port attribué par le système
+    socklen_t server_len = sizeof(server_addr);
+    if (getsockname(tcp_socket, (struct sockaddr*)&server_addr, &server_len) < 0) {
+        perror("Erreur lors de l'obtention du port");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    int actual_port = ntohs(server_addr.sin_port);
+    
     // Écouter les connexions entrantes
     if (listen(tcp_socket, 1) < 0) {
         perror("Erreur lors de l'écoute TCP");
@@ -291,12 +311,14 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
         return -1;
     }
     
-    printf("En attente de connexion du client pour envoyer le fichier %s...\n", filename);
+    printf("En attente de connexion du client pour envoyer le fichier %s sur le port %d...\n", 
+           filename, actual_port);
     
-    // Envoyer une notification au client via UDP
+    // Envoyer une notification au client via UDP avec le port à utiliser
     Request notification;
     char notification_content[MAX_MSG_SIZE];
-    snprintf(notification_content, sizeof(notification_content), "@file_ready %s", filename);
+    snprintf(notification_content, sizeof(notification_content), "@file_ready %s %d", 
+             filename, actual_port);
     init_request(&notification, REQ_COMMAND, "Server", "", notification_content);
     
     if (sendto(global_socket_fd, &notification, sizeof(Request), 0,
