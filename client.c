@@ -61,7 +61,36 @@ int connect_to_server(Client *client, const char *username, const char *password
     init_request(&req, REQ_CONNECT, username, "", connect_msg);
     
     // Envoyer la requête au serveur
-    return send_request(client, &req);
+    if (send_request(client, &req) < 0) {
+        return -1;
+    }
+    
+    // Attendre la réponse du serveur
+    Request response;
+    struct sockaddr_in server_addr;
+    socklen_t server_len = sizeof(server_addr);
+    
+    ssize_t received = recvfrom(client->socket_fd, &response, sizeof(Request), 0,
+                              (struct sockaddr*)&server_addr, &server_len);
+    
+    if (received < 0) {
+        perror("Erreur lors de la réception de la réponse de connexion");
+        return -1;
+    }
+    
+    // Vérifier si la connexion a été acceptée
+    if (strstr(response.content, "Erreur:") != NULL) {
+        printf("\n[SERVER ERROR] %s\n", response.content);
+        printf("Connexion refusée. Fermeture du client.\n");
+        return -1;
+    }
+    
+    if (strstr(response.content, "Connexion réussie") != NULL) {
+        printf("[SERVER] %s\n", response.content);
+        return 0;
+    }
+    
+    return 0;  // Connexion réussie par défaut
 }
 
 int send_request(Client *client, Request *req) {
@@ -190,6 +219,7 @@ int main(int argc, char *argv[]) {
     
     // Se connecter au serveur
     if (connect_to_server(&client, username, password) < 0) {
+        printf("\nÉchec de la connexion.\n");
         close(client.socket_fd);
         return EXIT_FAILURE;
     }
