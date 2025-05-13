@@ -12,9 +12,12 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <errno.h>  // Ajouté pour les codes d'erreur comme EAGAIN
+#include <libgen.h>  // For basename()
+#include <sys/stat.h> // For mkdir()
 
 #define MAX_MSG_SIZE 1024
 #define SERVER_PORT 8888
+#define FILE_TRANSFER_PORT 9876
 
 // Ajouter ces déclarations
 extern int global_socket_fd;  // Socket globale pour la gestion du signal

@@ -1,6 +1,8 @@
 // client.c
 #include "client.h"
 #include <errno.h>
+#include <libgen.h>
+#include <sys/stat.h>
 
 // External variables defined in common.c
 extern volatile sig_atomic_t running;
@@ -78,6 +80,182 @@ int send_request(Client *client, Request *req) {
     return 0;
 }
 
+// Fonction pour envoyer un fichier via TCP
+int send_file(const char *filename, const char *server_ip) {
+    int tcp_socket;
+    struct sockaddr_in server_addr;
+    FILE *file;
+    char buffer[1024];
+    size_t bytes_read;
+    
+    // Ouvrir le fichier
+    file = fopen(filename, "rb");
+    if (file == NULL) {
+        perror("Erreur lors de l'ouverture du fichier");
+        return -1;
+    }
+    
+    // Créer une socket TCP
+    tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcp_socket < 0) {
+        perror("Erreur lors de la création de la socket TCP");
+        fclose(file);
+        return -1;
+    }
+    
+    // Configurer l'adresse du serveur
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(FILE_TRANSFER_PORT); // Port dédié aux transferts de fichiers
+    
+    if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
+        perror("Adresse IP invalide");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Se connecter au serveur
+    if (connect(tcp_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Erreur lors de la connexion TCP au serveur");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Envoyer le nom du fichier d'abord
+    char filename_buffer[256];
+    strncpy(filename_buffer, basename((char*)filename), 255);
+    filename_buffer[255] = '\0';
+    
+    if (send(tcp_socket, filename_buffer, strlen(filename_buffer) + 1, 0) < 0) {
+        perror("Erreur lors de l'envoi du nom de fichier");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Attendre la confirmation du serveur
+    char ack_buffer[10];
+    if (recv(tcp_socket, ack_buffer, sizeof(ack_buffer), 0) < 0) {
+        perror("Erreur lors de la réception de l'ACK");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    if (strcmp(ack_buffer, "OK") != 0) {
+        fprintf(stderr, "Le serveur a refusé le transfert de fichier\n");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Envoyer le contenu du fichier
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        if (send(tcp_socket, buffer, bytes_read, 0) < 0) {
+            perror("Erreur lors de l'envoi du fichier");
+            close(tcp_socket);
+            fclose(file);
+            return -1;
+        }
+    }
+    
+    printf("Fichier envoyé avec succès.\n");
+    
+    // Fermer la socket et le fichier
+    close(tcp_socket);
+    fclose(file);
+    
+    return 0;
+}
+
+// Fonction pour recevoir un fichier via TCP
+int receive_file(const char *save_dir, const char *server_ip) {
+    int tcp_socket;
+    struct sockaddr_in server_addr;
+    FILE *file;
+    char buffer[1024];
+    ssize_t bytes_received;
+    
+    // Créer une socket TCP
+    tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcp_socket < 0) {
+        perror("Erreur lors de la création de la socket TCP");
+        return -1;
+    }
+    
+    // Configurer l'adresse du serveur
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(FILE_TRANSFER_PORT); // Port dédié aux transferts de fichiers
+    
+    if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
+        perror("Adresse IP invalide");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Se connecter au serveur
+    if (connect(tcp_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Erreur lors de la connexion TCP au serveur");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Recevoir le nom du fichier
+    char filename[256];
+    if ((bytes_received = recv(tcp_socket, filename, sizeof(filename), 0)) <= 0) {
+        perror("Erreur lors de la réception du nom de fichier");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Envoyer l'ACK au serveur
+    if (send(tcp_socket, "OK", 3, 0) < 0) {
+        perror("Erreur lors de l'envoi de l'ACK");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Construire le chemin complet du fichier
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), "%s/%s", save_dir, filename);
+    
+    // Ouvrir le fichier pour écriture
+    file = fopen(filepath, "wb");
+    if (file == NULL) {
+        perror("Erreur lors de la création du fichier");
+        close(tcp_socket);
+        return -1;
+    }
+    
+    // Recevoir et écrire le contenu du fichier
+    while ((bytes_received = recv(tcp_socket, buffer, sizeof(buffer), 0)) > 0) {
+        if (fwrite(buffer, 1, (size_t)bytes_received, file) != (size_t)bytes_received) {
+            perror("Erreur lors de l'écriture dans le fichier");
+            fclose(file);
+            close(tcp_socket);
+            return -1;
+        }
+    }
+    
+    if (bytes_received < 0) {
+        perror("Erreur lors de la réception du fichier");
+        fclose(file);
+        close(tcp_socket);
+        return -1;
+    }
+    
+    printf("Fichier reçu avec succès: %s\n", filepath);
+    
+    // Fermer le fichier et la socket
+    fclose(file);
+    close(tcp_socket);
+    
+    return 0;
+}
+
 void *send_message_thread(void *arg) {
     Client *client = (Client *)arg;
     char buffer[MAX_MSG_SIZE];
@@ -100,17 +278,39 @@ void *send_message_thread(void *arg) {
         // Supprimer le caractère de nouvelle ligne
         buffer[strcspn(buffer, "\n")] = '\0';
         
-        // Vérifier si c'est une commande ou un message
-        if (buffer[0] == '@') {
+        // Vérifier si c'est une commande d'upload de fichier
+        if (strncmp(buffer, "@upload ", 8) == 0) {
+            // Extraire le nom du fichier
+            char *filename = buffer + 8;
+            
+            // Informer l'utilisateur
+            printf("Envoi du fichier %s en cours...\n", filename);
+            
+            // Envoyer le fichier
+            if (send_file(filename, inet_ntoa(client->server_addr.sin_addr)) == 0) {
+                // Informer le serveur de l'envoi réussi via UDP
+                char notification[MAX_MSG_SIZE];
+                snprintf(notification, sizeof(notification), "@file_uploaded %s", basename(filename));
+                init_request(&req, REQ_COMMAND, client->username, "", notification);
+                send_request(client, &req);
+            }
+        }
+        // Vérifier si c'est une commande de téléchargement de fichier
+        else if (strncmp(buffer, "@download ", 10) == 0) {
+            // Envoyer la commande au serveur
+            init_request(&req, REQ_COMMAND, client->username, "", buffer);
+            send_request(client, &req);
+        }
+        // Autres commandes ou messages normaux
+        else if (buffer[0] == '@') {
             // C'est une commande
             init_request(&req, REQ_COMMAND, client->username, "", buffer);
+            send_request(client, &req);
         } else {
             // C'est un message normal
             init_request(&req, REQ_MESSAGE, client->username, "", buffer);
+            send_request(client, &req);
         }
-        
-        // Envoyer la requête
-        send_request(client, &req);
     }
     
     // Envoyer un message de déconnexion avant de quitter
@@ -146,9 +346,28 @@ void *receive_message_thread(void *arg) {
             continue;
         }
         
-        // Traitement normal...
-        printf("\r[%s] %s\n", response.sender, response.content);
-        fflush(stdout);
+        // Vérifier s'il s'agit d'une notification de fichier à télécharger
+        if (response.type == REQ_COMMAND && strncmp(response.content, "@file_ready ", 12) == 0) {
+            printf("\rNotification: Fichier prêt à être téléchargé. Lancement du téléchargement...\n");
+            
+            // Télécharger le fichier
+            char download_dir[256] = "./downloads"; // Dossier par défaut
+            
+            // Créer le dossier s'il n'existe pas
+            mkdir(download_dir, 0755);
+            
+            if (receive_file(download_dir, inet_ntoa(client->server_addr.sin_addr)) == 0) {
+                printf("Fichier téléchargé avec succès dans %s\n", download_dir);
+            }
+            
+            printf("Vous: ");
+            fflush(stdout);
+        } else {
+            // Traitement normal des messages
+            printf("\r[%s] %s\n", response.sender, response.content);
+            printf("Vous: ");
+            fflush(stdout);
+        }
 
         if (strcmp(response.sender, "Server") == 0 && 
             strstr(response.content, "a quitté le chat") != NULL) {

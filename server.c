@@ -124,6 +124,248 @@ int send_response(Server *server, Request *res, struct sockaddr_in *client_addr)
     return 0;
 }
 
+// Fonction pour gérer le transfert de fichiers via TCP
+void *file_transfer_thread(void *arg) {
+    (void)arg; // Pour éviter l'avertissement de paramètre non utilisé
+    
+    int server_socket, client_socket;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    char buffer[1024];
+    
+    // Créer une socket TCP
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket < 0) {
+        perror("Erreur lors de la création de la socket TCP");
+        return NULL;
+    }
+    
+    // Configurer l'adresse du serveur
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_addr.sin_port = htons(FILE_TRANSFER_PORT);
+    
+    // Réutiliser l'adresse
+    int opt = 1;
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        perror("Erreur lors de la configuration de la socket TCP");
+        close(server_socket);
+        return NULL;
+    }
+    
+    // Lier la socket à l'adresse
+    if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Erreur lors du bind TCP");
+        close(server_socket);
+        return NULL;
+    }
+    
+    // Écouter les connexions entrantes
+    if (listen(server_socket, 5) < 0) {
+        perror("Erreur lors de l'écoute TCP");
+        close(server_socket);
+        return NULL;
+    }
+    
+    printf("Serveur de fichiers TCP démarré sur le port %d\n", FILE_TRANSFER_PORT);
+    
+    while (running) {
+        // Accepter une connexion
+        client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_len);
+        if (client_socket < 0) {
+            if (!running) break;
+            perror("Erreur lors de l'acceptation de la connexion");
+            continue;
+        }
+        
+        printf("Nouvelle connexion de fichier depuis %s:%d\n", 
+               inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        
+        // Recevoir le nom du fichier
+        char filename[256];
+        ssize_t bytes_received = recv(client_socket, filename, sizeof(filename), 0);
+        
+        if (bytes_received <= 0) {
+            perror("Erreur lors de la réception du nom de fichier");
+            close(client_socket);
+            continue;
+        }
+        
+        // Créer le répertoire de stockage s'il n'existe pas
+        char upload_dir[256] = "./uploads";
+        mkdir(upload_dir, 0755);
+        
+        // Construire le chemin complet du fichier
+        char filepath[512];
+        snprintf(filepath, sizeof(filepath), "%s/%s", upload_dir, filename);
+        
+        // Envoyer un ACK au client
+        if (send(client_socket, "OK", 3, 0) < 0) {
+            perror("Erreur lors de l'envoi de l'ACK");
+            close(client_socket);
+            continue;
+        }
+        
+        // Ouvrir le fichier pour écriture
+        FILE *file = fopen(filepath, "wb");
+        if (file == NULL) {
+            perror("Erreur lors de la création du fichier");
+            close(client_socket);
+            continue;
+        }
+        
+        // Recevoir et enregistrer le contenu du fichier
+        ssize_t bytes_read;
+        while ((bytes_read = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
+            if (fwrite(buffer, 1, (size_t)bytes_read, file) != (size_t)bytes_read) {
+                perror("Erreur lors de l'écriture dans le fichier");
+                break;
+            }
+        }
+        
+        // Fermer le fichier
+        fclose(file);
+        
+        if (bytes_read < 0) {
+            perror("Erreur lors de la réception du fichier");
+        } else {
+            printf("Fichier reçu et enregistré: %s\n", filepath);
+        }
+        
+        // Fermer la socket client
+        close(client_socket);
+    }
+    
+    // Fermer la socket serveur
+    close(server_socket);
+    printf("Thread de transfert de fichiers terminé.\n");
+    return NULL;
+}
+
+// Fonction pour envoyer un fichier à un client
+int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
+    int tcp_socket;
+    struct sockaddr_in server_addr;
+    FILE *file;
+    char buffer[1024];
+    size_t bytes_read;
+    
+    // Ouvrir le fichier
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), "./uploads/%s", filename);
+    
+    file = fopen(filepath, "rb");
+    if (file == NULL) {
+        perror("Erreur lors de l'ouverture du fichier");
+        return -1;
+    }
+    
+    // Créer une socket TCP
+    tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcp_socket < 0) {
+        perror("Erreur lors de la création de la socket TCP");
+        fclose(file);
+        return -1;
+    }
+    
+    // Configurer l'adresse du serveur
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_addr.sin_port = htons(FILE_TRANSFER_PORT);
+    
+    // Lier la socket à l'adresse
+    if (bind(tcp_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Erreur lors du bind TCP");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Écouter les connexions entrantes
+    if (listen(tcp_socket, 1) < 0) {
+        perror("Erreur lors de l'écoute TCP");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    printf("En attente de connexion du client pour envoyer le fichier %s...\n", filename);
+    
+    // Envoyer une notification au client via UDP
+    Request notification;
+    char notification_content[MAX_MSG_SIZE];
+    snprintf(notification_content, sizeof(notification_content), "@file_ready %s", filename);
+    init_request(&notification, REQ_COMMAND, "Server", "", notification_content);
+    
+    if (sendto(global_socket_fd, &notification, sizeof(Request), 0,
+               (struct sockaddr*)client_addr, sizeof(struct sockaddr_in)) < 0) {
+        perror("Erreur lors de l'envoi de la notification");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Accepter la connexion du client
+    socklen_t client_len = sizeof(*client_addr);
+    int client_socket = accept(tcp_socket, (struct sockaddr*)client_addr, &client_len);
+    
+    if (client_socket < 0) {
+        perror("Erreur lors de l'acceptation de la connexion");
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Envoyer le nom du fichier
+    if (send(client_socket, filename, strlen(filename) + 1, 0) < 0) {
+        perror("Erreur lors de l'envoi du nom de fichier");
+        close(client_socket);
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Attendre l'ACK du client
+    char ack_buffer[10];
+    if (recv(client_socket, ack_buffer, sizeof(ack_buffer), 0) < 0) {
+        perror("Erreur lors de la réception de l'ACK");
+        close(client_socket);
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    if (strcmp(ack_buffer, "OK") != 0) {
+        fprintf(stderr, "Le client a refusé le transfert de fichier\n");
+        close(client_socket);
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    // Envoyer le contenu du fichier
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        if (send(client_socket, buffer, bytes_read, 0) < 0) {
+            perror("Erreur lors de l'envoi du fichier");
+            close(client_socket);
+            close(tcp_socket);
+            fclose(file);
+            return -1;
+        }
+    }
+    
+    printf("Fichier envoyé avec succès à %s.\n", inet_ntoa(client_addr->sin_addr));
+    
+    // Fermer les sockets et le fichier
+    close(client_socket);
+    close(tcp_socket);
+    fclose(file);
+    
+    return 0;
+}
+
 void process_request(Server *server, Request *req, struct sockaddr_in *client_addr) {
     Request response;
     
@@ -214,13 +456,73 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
         }
         
         case REQ_COMMAND: {
-            // Traiter les commandes (à implémenter dans la partie 2)
+            // Traiter les commandes
             printf("Commande de %s: %s\n", req->sender, req->content);
             
-            // Répondre au client que la commande a été reçue
-            init_request(&response, REQ_MESSAGE, "Server", "", 
-                         "Commande reçue (traitement à implémenter)");
-            send_response(server, &response, client_addr);
+            // Traiter la commande d'upload de fichier
+            if (strncmp(req->content, "@file_uploaded ", 14) == 0) {
+                char filename[256];
+                sscanf(req->content + 14, "%255s", filename);
+                
+                printf("Fichier %s téléchargé par %s\n", filename, req->sender);
+                
+                // Confirmer la réception
+                init_request(&response, REQ_MESSAGE, "Server", "", 
+                             "Fichier téléchargé avec succès sur le serveur");
+                send_response(server, &response, client_addr);
+            }
+            // Traiter la commande de téléchargement
+            else if (strncmp(req->content, "@download ", 10) == 0) {
+                char filename[256];
+                sscanf(req->content + 10, "%255s", filename);
+                
+                printf("Demande de téléchargement du fichier %s par %s\n", filename, req->sender);
+                
+                // Vérifier l'existence du fichier
+                char filepath[512];
+                snprintf(filepath, sizeof(filepath), "./uploads/%s", filename);
+                
+                if (access(filepath, F_OK) != -1) {
+                    // Le fichier existe, préparer l'envoi
+                    init_request(&response, REQ_MESSAGE, "Server", "", 
+                                "Préparation de l'envoi du fichier...");
+                    send_response(server, &response, client_addr);
+                    
+                    // Lancer le transfert du fichier dans un thread séparé
+                    pthread_t file_send_thread;
+                    FileTransferArgs *args = malloc(sizeof(FileTransferArgs));
+                    if (args) {
+                        strncpy(args->filename, filename, sizeof(args->filename) - 1);
+                        args->filename[sizeof(args->filename) - 1] = '\0';
+                        memcpy(&args->client_addr, client_addr, sizeof(struct sockaddr_in));
+                        
+                        if (pthread_create(&file_send_thread, NULL, file_send_thread_func, args) != 0) {
+                            perror("Erreur lors de la création du thread d'envoi de fichier");
+                            free(args);
+                            init_request(&response, REQ_MESSAGE, "Server", "", 
+                                        "Erreur serveur lors de l'envoi du fichier");
+                            send_response(server, &response, client_addr);
+                        }
+                        pthread_detach(file_send_thread);
+                    } else {
+                        init_request(&response, REQ_MESSAGE, "Server", "", 
+                                    "Erreur serveur: mémoire insuffisante");
+                        send_response(server, &response, client_addr);
+                    }
+                } else {
+                    // Le fichier n'existe pas
+                    init_request(&response, REQ_MESSAGE, "Server", "", 
+                                "Fichier non trouvé sur le serveur");
+                    send_response(server, &response, client_addr);
+                }
+            }
+            // Autres commandes
+            else {
+                // Répondre au client que la commande a été reçue
+                init_request(&response, REQ_MESSAGE, "Server", "", 
+                            "Commande reçue mais non supportée");
+                send_response(server, &response, client_addr);
+            }
             break;
         }
         
@@ -231,6 +533,18 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
             send_response(server, &response, client_addr);
             break;
     }
+}
+
+// Thread pour l'envoi de fichier
+void *file_send_thread_func(void *arg) {
+    FileTransferArgs *args = (FileTransferArgs *)arg;
+    
+    // Envoyer le fichier
+    send_file_to_client(args->filename, &args->client_addr);
+    
+    // Libérer la mémoire
+    free(args);
+    return NULL;
 }
 
 void *receive_messages_thread(void *arg) {
@@ -270,7 +584,7 @@ void *receive_messages_thread(void *arg) {
 }
 
 // Fonction principale
-int main(void) {  // Suppression des paramètres inutilisés
+int main(void) {
     Server server;
     
     // Initialiser le serveur
@@ -280,6 +594,15 @@ int main(void) {  // Suppression des paramètres inutilisés
     
     printf("Serveur démarré sur le port %d\n", SERVER_PORT);
     printf("Appuyez sur Ctrl+C pour arrêter le serveur.\n");
+    
+    // Créer le thread de transfert de fichiers TCP
+    pthread_t file_thread;
+    if (pthread_create(&file_thread, NULL, file_transfer_thread, &server) != 0) {
+        perror("Erreur lors de la création du thread de transfert de fichiers");
+        close(server.socket_fd);
+        pthread_mutex_destroy(&server.clients_mutex);
+        return EXIT_FAILURE;
+    }
     
     // Créer le thread principal de réception
     pthread_t receive_thread;
@@ -291,8 +614,9 @@ int main(void) {  // Suppression des paramètres inutilisés
         return EXIT_FAILURE;
     }
     
-    // Attendre que le thread se termine (lorsque running devient 0)
+    // Attendre que les threads se terminent (lorsque running devient 0)
     pthread_join(receive_thread, NULL);
+    pthread_join(file_thread, NULL);
     
     // Envoyer un message de fermeture à tous les clients
     Request shutdown_notice;

@@ -1,0 +1,47 @@
+@startuml Server-Based File Transfer System
+
+!define LIGHTBLUE
+!define BLUE
+skinparam sequenceMessageAlign center
+skinparam backgroundColor White
+skinparam componentStyle uml2
+
+actor "Uploader Client" as UploaderClient
+participant "Server" as Server
+actor "Downloader Client" as DownloaderClient
+
+note over UploaderClient: Every upload/reception of files will have their dedicated
+== File Upload Process ==
+Server <-> UploaderClient : TCP handshake
+UploaderClient -> Server : @upload <file_fullpath>
+group File Upload Process (Client -> Server)
+    UploaderClient -> UploaderClient : Reading the file contents, sizing it up
+    UploaderClient -> Server : File data, File size, File name
+    Server -> Server : Store the received file in downloads/
+    Server-> UploaderClient : ACKN of receipt
+    UploaderClient -> UploaderClient : TCP connection closed
+    Server -> Server : TCP connection closed
+end group
+== File Download Process ==
+
+/'
+DownloaderClient -> Server :Requesting connection to the server
+Server -> DownloaderClient : Connection OK, ready to send the file
+'/
+
+Server <-> DownloaderClient : TCP handshake
+
+DownloaderClient -> Server: @download <file_name>
+
+group File upload Process (Server-> Client)
+    Server -> Server : Reading the file contents, splitting into chunks
+    Server -> DownloaderClient : File data, File size, File name
+    DownloaderClient -> DownloaderClient : Store the received file
+    DownloaderClient-> Server : ACKN of receipt
+    Server -> Server : TCP connection closed
+    DownloaderClient -> DownloaderClient: TCP connection closed
+end group
+
+
+
+@enduml
