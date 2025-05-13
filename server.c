@@ -66,52 +66,58 @@ int find_client_by_username(Server *server, const char *username) {
 
 int add_client(Server *server, const char *username, const char *password, 
     struct sockaddr_in *addr) {
-pthread_mutex_lock(&server->clients_mutex);
-
-// Vérifier si le client existe déjà (pas connecté)
-int idx = -1;
-for (int i = 0; i < server->client_count; i++) {
-if (strcmp(server->clients[i].username, username) == 0) {
- idx = i;
- break;
-}
-}
-
-if (idx >= 0) {
-// Utilisateur trouvé, vérifier le mot de passe
-if (strcmp(server->clients[idx].password, password) != 0) {
- pthread_mutex_unlock(&server->clients_mutex);
- return -3; // Code d'erreur : mot de passe incorrect
-}
-
-// Reconnexion autorisée - mettre à jour l'adresse
-memcpy(&server->clients[idx].addr, addr, sizeof(struct sockaddr_in));
-server->clients[idx].connected = true;
-
-pthread_mutex_unlock(&server->clients_mutex);
-return idx;
-}
-
-// Nouveau client - vérifier s'il y a de la place
-if (server->client_count >= MAX_CLIENTS) {
-pthread_mutex_unlock(&server->clients_mutex);
-return -4; // Code d'erreur : serveur plein
-}
-
-// Ajouter le nouveau client
-idx = server->client_count++;
-
-strncpy(server->clients[idx].username, username, sizeof(server->clients[idx].username) - 1);
-server->clients[idx].username[sizeof(server->clients[idx].username) - 1] = '\0';
-
-strncpy(server->clients[idx].password, password, sizeof(server->clients[idx].password) - 1);
-server->clients[idx].password[sizeof(server->clients[idx].password) - 1] = '\0';
-
-memcpy(&server->clients[idx].addr, addr, sizeof(struct sockaddr_in));
-server->clients[idx].connected = true;
-
-pthread_mutex_unlock(&server->clients_mutex);
-return idx;
+    pthread_mutex_lock(&server->clients_mutex);
+    
+    // Vérifier si le client existe déjà
+    int idx = -1;
+    for (int i = 0; i < server->client_count; i++) {
+        if (strcmp(server->clients[i].username, username) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    
+    if (idx >= 0) {
+        // Utilisateur trouvé - vérifier s'il est déjà connecté
+        if (server->clients[idx].connected) {
+            pthread_mutex_unlock(&server->clients_mutex);
+            return -2; // Code d'erreur : utilisateur déjà connecté
+        }
+        
+        // Vérifier le mot de passe pour reconnexion
+        if (strcmp(server->clients[idx].password, password) != 0) {
+            pthread_mutex_unlock(&server->clients_mutex);
+            return -3; // Code d'erreur : mot de passe incorrect
+        }
+        
+        // Reconnexion autorisée - mettre à jour l'adresse
+        memcpy(&server->clients[idx].addr, addr, sizeof(struct sockaddr_in));
+        server->clients[idx].connected = true;
+        
+        pthread_mutex_unlock(&server->clients_mutex);
+        return idx;
+    }
+    
+    // Nouveau client - vérifier s'il y a de la place
+    if (server->client_count >= MAX_CLIENTS) {
+        pthread_mutex_unlock(&server->clients_mutex);
+        return -4; // Code d'erreur : serveur plein
+    }
+    
+    // Ajouter le nouveau client
+    idx = server->client_count++;
+    
+    strncpy(server->clients[idx].username, username, sizeof(server->clients[idx].username) - 1);
+    server->clients[idx].username[sizeof(server->clients[idx].username) - 1] = '\0';
+    
+    strncpy(server->clients[idx].password, password, sizeof(server->clients[idx].password) - 1);
+    server->clients[idx].password[sizeof(server->clients[idx].password) - 1] = '\0';
+    
+    memcpy(&server->clients[idx].addr, addr, sizeof(struct sockaddr_in));
+    server->clients[idx].connected = true;
+    
+    pthread_mutex_unlock(&server->clients_mutex);
+    return idx;
 }
 
 void remove_client(Server *server, const char *username) {
