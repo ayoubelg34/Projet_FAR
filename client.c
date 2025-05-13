@@ -297,6 +297,15 @@ int receive_file_with_port(const char *save_dir, const char *server_ip, int port
         return -1;
     }
     
+    // Générer un nom unique si le fichier existe déjà
+    char unique_filename[256];
+    generate_unique_filename(save_dir, filename, unique_filename, sizeof(unique_filename));
+    
+    // Si le nom a été modifié, informer l'utilisateur
+    if (strcmp(filename, unique_filename) != 0) {
+        printf("Le fichier existe déjà. Renommé en %s\n", unique_filename);
+    }
+    
     // Envoyer l'ACK au serveur
     if (send(tcp_socket, "OK", 3, 0) < 0) {
         perror("Erreur lors de l'envoi de l'ACK");
@@ -304,9 +313,12 @@ int receive_file_with_port(const char *save_dir, const char *server_ip, int port
         return -1;
     }
     
+    // Créer le dossier s'il n'existe pas
+    mkdir(save_dir, 0755);
+    
     // Construire le chemin complet du fichier
     char filepath[512];
-    snprintf(filepath, sizeof(filepath), "%s/%s", save_dir, filename);
+    snprintf(filepath, sizeof(filepath), "%s/%s", save_dir, unique_filename);
     
     // Ouvrir le fichier pour écriture
     file = fopen(filepath, "wb");
@@ -479,7 +491,13 @@ void *receive_message_thread(void *arg) {
 
 // Fonction principale
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
+    const char* server_ip;
+    if(argc < 2){
+        printf("Running on localhost (127.0.0.1)\n");
+        server_ip = "127.0.0.1";
+    }else if (argc == 2){
+        server_ip = argv[1];
+    }else {
         fprintf(stderr, "Usage: %s <server_ip>\n", argv[0]);
         return EXIT_FAILURE;
     }
@@ -489,7 +507,7 @@ int main(int argc, char *argv[]) {
     char password[50];
     
     // Initialiser le client
-    if (init_client(&client, argv[1]) < 0) {
+    if (init_client(&client, server_ip) < 0) {
         return EXIT_FAILURE;
     }
     

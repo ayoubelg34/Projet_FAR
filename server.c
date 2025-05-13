@@ -196,9 +196,18 @@ void *file_transfer_thread(void *arg) {
         char upload_dir[256] = "./uploads";
         mkdir(upload_dir, 0755);
         
+        // Générer un nom unique si le fichier existe déjà
+        char unique_filename[256];
+        generate_unique_filename(upload_dir, filename, unique_filename, sizeof(unique_filename));
+        
         // Construire le chemin complet du fichier
         char filepath[512];
-        snprintf(filepath, sizeof(filepath), "%s/%s", upload_dir, filename);
+        snprintf(filepath, sizeof(filepath), "%s/%s", upload_dir, unique_filename);
+        
+        // Si le nom a été modifié, informer l'utilisateur
+        if (strcmp(filename, unique_filename) != 0) {
+            printf("Le fichier existe déjà. Renommé en %s\n", unique_filename);
+        }
         
         // Envoyer un ACK au client
         if (send(client_socket, "OK", 3, 0) < 0) {
