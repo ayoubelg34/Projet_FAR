@@ -1,0 +1,16 @@
+=== AIDE UTILISATEUR ===
+
+Commandes disponibles :
+
+@help - Affiche cette aide
+@ping - Test de connectivité (le serveur répond "pong")
+@msg <utilisateur> <message> - Envoie un message privé à un utilisateur
+@credits - Affiche les crédits de l'application
+@shutdown - Arrête le serveur (réservé aux administrateurs)
+
+Navigation :
+- Tapez simplement votre message pour l'envoyer à tous les utilisateurs connectés
+- Utilisez Ctrl+C pour quitter l'application proprement
+
+Support :
+- En cas de problème, contactez votre administrateur système

@@ -1,0 +1,21 @@
+=== CRÉDITS ===
+
+Application de Messagerie Textuelle Distante
+Projet FAR 2024-2025
+IG3 - École d'ingénieurs
+
+Développée par :
+- Tom Cantillon
+- Ayoub El Ghazi
+- Denocq Elio
+
+Technologies utilisées :
+- Langage C
+- Sockets UDP/TCP
+- Multi-threading (pthread)
+- Gestion des signaux Unix
+
+Version : 1.0
+Date : Mai 2025
+
+Merci d'utiliser notre application !

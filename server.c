@@ -1,5 +1,6 @@
 // server.c
 #include "server.h"
+#include "command.h"
 
 int init_server(Server *server) {
     // Créer la socket UDP
@@ -214,13 +215,14 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
         }
         
         case REQ_COMMAND: {
-            // Traiter les commandes (à implémenter dans la partie 2)
             printf("Commande de %s: %s\n", req->sender, req->content);
             
-            // Répondre au client que la commande a été reçue
-            init_request(&response, REQ_MESSAGE, "Server", "", 
-                         "Commande reçue (traitement à implémenter)");
-            send_response(server, &response, client_addr);
+            CommandResult result = process_command(server, req, client_addr);
+            
+            if (result == CMD_SHUTDOWN) {
+                // La commande shutdown a été exécutée, le serveur va s'arrêter
+                running = 0;
+            }
             break;
         }
         
@@ -281,6 +283,8 @@ int main(void) {  // Suppression des paramètres inutilisés
     printf("Serveur démarré sur le port %d\n", SERVER_PORT);
     printf("Appuyez sur Ctrl+C pour arrêter le serveur.\n");
     
+    init_command_system();
+
     // Créer le thread principal de réception
     pthread_t receive_thread;
     
