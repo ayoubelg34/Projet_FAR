@@ -338,6 +338,14 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
         return -1;
     }
     
+    // Configurer un timeout pour accept pour ne pas bloquer indéfiniment
+    struct timeval tv;
+    tv.tv_sec = 30;  // 30 secondes timeout
+    tv.tv_usec = 0;
+    if (setsockopt(tcp_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        perror("Erreur lors de la configuration du timeout");
+    }
+    
     // Accepter la connexion du client
     socklen_t client_len = sizeof(*client_addr);
     int client_socket = accept(tcp_socket, (struct sockaddr*)client_addr, &client_len);
@@ -397,7 +405,58 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
     return 0;
 }
 
+// Thread pour l'envoi de fichier
+void *file_send_thread_func(void *arg) {
+    FileTransferArgs *args = (FileTransferArgs *)arg;
+    
+    printf("Démarrage du thread d'envoi de fichier pour %s\n", args->filename);
+    
+    // Envoyer le fichier
+    int result = send_file_to_client(args->filename, &args->client_addr);
+    
+    // Stocker le résultat
+    args->success = (result == 0);
+    if (!args->success) {
+        strncpy(args->message, "Échec de l'envoi du fichier", sizeof(args->message) - 1);
+        args->message[sizeof(args->message) - 1] = '\0';
+    } else {
+        strncpy(args->message, "Fichier envoyé avec succès", sizeof(args->message) - 1);
+        args->message[sizeof(args->message) - 1] = '\0';
+    }
+    
+    // Notifier le client du résultat via UDP
+    Request notification;
+    char notification_content[MAX_MSG_SIZE];
+    
+    if (args->success) {
+        snprintf(notification_content, sizeof(notification_content), 
+                 "Fichier %s envoyé avec succès", args->filename);
+    } else {
+        snprintf(notification_content, sizeof(notification_content), 
+                 "Échec de l'envoi du fichier %s", args->filename);
+    }
+    
+    init_request(&notification, REQ_MESSAGE, "Server", "", notification_content);
+    
+    Server *server = (Server *)pthread_getspecific(server_key);
+    if (server) {
+        send_response(server, &notification, &args->client_addr);
+    } else {
+        // Fallback si le serveur n'est pas accessible via pthread_getspecific
+        sendto(global_socket_fd, &notification, sizeof(Request), 0,
+               (struct sockaddr*)&args->client_addr, sizeof(struct sockaddr_in));
+    }
+    
+    return args;
+}
+
+// Clé pour stocker le pointeur serveur dans les threads
+pthread_key_t server_key;
+
 void process_request(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    // Stocker le pointeur serveur pour les threads de fichier
+    pthread_setspecific(server_key, server);
+    
     Request response;
     
     switch (req->type) {
@@ -526,6 +585,10 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
                         strncpy(args->filename, filename, sizeof(args->filename) - 1);
                         args->filename[sizeof(args->filename) - 1] = '\0';
                         memcpy(&args->client_addr, client_addr, sizeof(struct sockaddr_in));
+                        args->success = 0;  // Résultat non encore disponible
+                        args->message[0] = '\0';
+                        
+                        printf("Création du thread d'envoi de fichier pour %s\n", filename);
                         
                         if (pthread_create(&file_send_thread, NULL, file_send_thread_func, args) != 0) {
                             perror("Erreur lors de la création du thread d'envoi de fichier");
@@ -533,8 +596,9 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
                             init_request(&response, REQ_MESSAGE, "Server", "", 
                                         "Erreur serveur lors de l'envoi du fichier");
                             send_response(server, &response, client_addr);
+                        } else {
+                            pthread_detach(file_send_thread);
                         }
-                        pthread_detach(file_send_thread);
                     } else {
                         init_request(&response, REQ_MESSAGE, "Server", "", 
                                     "Erreur serveur: mémoire insuffisante");
@@ -564,18 +628,6 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
             send_response(server, &response, client_addr);
             break;
     }
-}
-
-// Thread pour l'envoi de fichier
-void *file_send_thread_func(void *arg) {
-    FileTransferArgs *args = (FileTransferArgs *)arg;
-    
-    // Envoyer le fichier
-    send_file_to_client(args->filename, &args->client_addr);
-    
-    // Libérer la mémoire
-    free(args);
-    return NULL;
 }
 
 void *receive_messages_thread(void *arg) {
@@ -626,6 +678,12 @@ int main(void) {
     printf("Serveur démarré sur le port %d\n", SERVER_PORT);
     printf("Appuyez sur Ctrl+C pour arrêter le serveur.\n");
     
+    // Initialiser la clé pour stocker le serveur dans les threads
+    if (pthread_key_create(&server_key, NULL) != 0) {
+        perror("Erreur lors de la création de la clé thread");
+        return EXIT_FAILURE;
+    }
+    
     // Créer le thread de transfert de fichiers TCP
     pthread_t file_thread;
     if (pthread_create(&file_thread, NULL, file_transfer_thread, &server) != 0) {
@@ -664,6 +722,7 @@ int main(void) {
     // Nettoyage
     close(server.socket_fd);
     pthread_mutex_destroy(&server.clients_mutex);
+    pthread_key_delete(server_key);
     
     printf("Serveur arrêté proprement.\n");
     

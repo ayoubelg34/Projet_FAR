@@ -10,6 +10,62 @@ extern int global_socket_fd;
 
 // Signal handler is defined in common.c
 
+// Déclaration de fonction pour la rendre explicite
+int send_file(const char *filename, const char *server_ip);
+
+// Thread pour l'envoi de fichier en arrière-plan
+void *file_transfer_thread(void *arg) {
+    FileTransferThreadArgs *args = (FileTransferThreadArgs *)arg;
+    
+    if (args->is_upload) {
+        // Upload de fichier
+        printf("\rEnvoi du fichier %s en arrière-plan...\n", args->filename);
+        printf("Vous: ");
+        fflush(stdout);
+        
+        if (send_file(args->filename, args->server_ip) == 0) {
+            // Succès
+            printf("\rFichier %s envoyé avec succès!\n", args->filename);
+            printf("Vous: ");
+            fflush(stdout);
+            
+            // Informer le serveur via UDP
+            Client *client = (Client *)pthread_getspecific(client_key);
+            if (client != NULL) {
+                Request req;
+                char notification[MAX_MSG_SIZE];
+                snprintf(notification, sizeof(notification), "@file_uploaded %s", basename(args->filename));
+                init_request(&req, REQ_COMMAND, client->username, "", notification);
+                send_request(client, &req);
+            }
+        } else {
+            // Échec
+            printf("\rÉchec de l'envoi du fichier %s.\n", args->filename);
+            printf("Vous: ");
+            fflush(stdout);
+        }
+    } else {
+        // Download de fichier
+        printf("\rRéception du fichier depuis le port %d en arrière-plan...\n", args->port);
+        printf("Vous: ");
+        fflush(stdout);
+        
+        if (receive_file_with_port(args->save_dir, args->server_ip, args->port) == 0) {
+            printf("\rFichier téléchargé avec succès dans %s\n", args->save_dir);
+        } else {
+            printf("\rÉchec du téléchargement du fichier.\n");
+        }
+        printf("Vous: ");
+        fflush(stdout);
+    }
+    
+    free(args);
+    return NULL;
+}
+
+// Clé pour stocker le pointeur client dans les threads
+pthread_key_t client_key;
+
 int init_client(Client *client, const char *server_ip) {
     // Créer la socket UDP
     client->socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -356,6 +412,10 @@ int receive_file_with_port(const char *save_dir, const char *server_ip, int port
 
 void *send_message_thread(void *arg) {
     Client *client = (Client *)arg;
+    
+    // Stocker le pointeur client pour les threads de fichier
+    pthread_setspecific(client_key, client);
+    
     char buffer[MAX_MSG_SIZE];
     Request req;
     
@@ -381,16 +441,27 @@ void *send_message_thread(void *arg) {
             // Extraire le nom du fichier
             char *filename = buffer + 8;
             
-            // Informer l'utilisateur
-            printf("Envoi du fichier %s en cours...\n", filename);
-            
-            // Envoyer le fichier
-            if (send_file(filename, inet_ntoa(client->server_addr.sin_addr)) == 0) {
-                // Informer le serveur de l'envoi réussi via UDP
-                char notification[MAX_MSG_SIZE];
-                snprintf(notification, sizeof(notification), "@file_uploaded %s", basename(filename));
-                init_request(&req, REQ_COMMAND, client->username, "", notification);
-                send_request(client, &req);
+            // Lancer le thread de transfert de fichier
+            pthread_t file_thread;
+            FileTransferThreadArgs *args = malloc(sizeof(FileTransferThreadArgs));
+            if (args) {
+                strncpy(args->filename, filename, sizeof(args->filename) - 1);
+                args->filename[sizeof(args->filename) - 1] = '\0';
+                strncpy(args->server_ip, inet_ntoa(client->server_addr.sin_addr), sizeof(args->server_ip) - 1);
+                args->server_ip[sizeof(args->server_ip) - 1] = '\0';
+                args->port = FILE_TRANSFER_PORT;
+                args->is_upload = 1;
+                
+                printf("Préparation de l'envoi du fichier %s en arrière-plan...\n", filename);
+                
+                if (pthread_create(&file_thread, NULL, file_transfer_thread, args) != 0) {
+                    perror("Erreur lors de la création du thread de transfert de fichier");
+                    free(args);
+                } else {
+                    pthread_detach(file_thread);
+                }
+            } else {
+                perror("Erreur d'allocation mémoire");
             }
         }
         // Vérifier si c'est une commande de téléchargement de fichier
@@ -420,6 +491,10 @@ void *send_message_thread(void *arg) {
 
 void *receive_message_thread(void *arg) {
     Client *client = (Client *)arg;
+    
+    // Stocker le pointeur client pour les threads de fichier
+    pthread_setspecific(client_key, client);
+    
     Request response;
     Request ack_response;
     socklen_t server_len = sizeof(client->server_addr);
@@ -446,7 +521,7 @@ void *receive_message_thread(void *arg) {
         
         // Vérifier s'il s'agit d'une notification de fichier à télécharger
         if (response.type == REQ_COMMAND && strncmp(response.content, "@file_ready ", 12) == 0) {
-            printf("\rNotification: Fichier prêt à être téléchargé. Lancement du téléchargement...\n");
+            printf("\rNotification: Fichier prêt à être téléchargé.\n");
             
             // Extraire le nom du fichier et le port à utiliser
             char filename[256];
@@ -454,18 +529,36 @@ void *receive_message_thread(void *arg) {
             
             // Essayer d'obtenir le port personnalisé
             if (sscanf(response.content, "@file_ready %255s %d", filename, &port) >= 1) {
-                printf("Téléchargement du fichier %s sur le port %d\n", filename, port);
+                printf("Préparation du téléchargement du fichier %s sur le port %d en arrière-plan\n", filename, port);
             }
             
-            // Télécharger le fichier
+            // Télécharger le fichier en arrière-plan
             char download_dir[256] = "./downloads"; // Dossier par défaut
             
             // Créer le dossier s'il n'existe pas
             mkdir(download_dir, 0755);
             
-            // Appeler la version modifiée de receive_file avec le port extrait
-            if (receive_file_with_port(download_dir, inet_ntoa(client->server_addr.sin_addr), port) == 0) {
-                printf("Fichier téléchargé avec succès dans %s\n", download_dir);
+            // Lancer le thread de téléchargement
+            pthread_t download_thread;
+            FileTransferThreadArgs *args = malloc(sizeof(FileTransferThreadArgs));
+            if (args) {
+                strncpy(args->filename, filename, sizeof(args->filename) - 1);
+                args->filename[sizeof(args->filename) - 1] = '\0';
+                strncpy(args->server_ip, inet_ntoa(client->server_addr.sin_addr), sizeof(args->server_ip) - 1);
+                args->server_ip[sizeof(args->server_ip) - 1] = '\0';
+                strncpy(args->save_dir, download_dir, sizeof(args->save_dir) - 1);
+                args->save_dir[sizeof(args->save_dir) - 1] = '\0';
+                args->port = port;
+                args->is_upload = 0;
+                
+                if (pthread_create(&download_thread, NULL, file_transfer_thread, args) != 0) {
+                    perror("Erreur lors de la création du thread de téléchargement");
+                    free(args);
+                } else {
+                    pthread_detach(download_thread);
+                }
+            } else {
+                perror("Erreur d'allocation mémoire");
             }
             
             printf("Vous: ");
@@ -508,6 +601,12 @@ int main(int argc, char *argv[]) {
     
     // Initialiser le client
     if (init_client(&client, server_ip) < 0) {
+        return EXIT_FAILURE;
+    }
+    
+    // Initialiser la clé pour stocker le client dans les threads
+    if (pthread_key_create(&client_key, NULL) != 0) {
+        perror("Erreur lors de la création de la clé thread");
         return EXIT_FAILURE;
     }
     
@@ -565,6 +664,9 @@ int main(int argc, char *argv[]) {
     
     // Fermer la socket
     close(client.socket_fd);
+    
+    // Nettoyage
+    pthread_key_delete(client_key);
     
     printf("Client déconnecté.\n");
     

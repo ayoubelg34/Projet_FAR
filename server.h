@@ -24,11 +24,16 @@ typedef struct {
     pthread_mutex_t clients_mutex;
 } Server;
 
-// Structure pour les arguments du thread d'envoi de fichier
+// Structure étendue pour les arguments du thread d'envoi de fichier
 typedef struct {
     char filename[256];
     struct sockaddr_in client_addr;
+    int success;      // Résultat de l'opération: 1 = succès, 0 = échec
+    char message[256]; // Message d'erreur éventuel
 } FileTransferArgs;
+
+// Clé pour stocker le pointeur serveur dans les threads
+extern pthread_key_t server_key;
 
 // Fonction pour initialiser le serveur
 int init_server(Server *server);
