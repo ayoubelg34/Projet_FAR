@@ -5,7 +5,7 @@ Commandes disponibles pour tous les utilisateurs :
 @ping - Test de connectivité (le serveur répond "pong")
 @msg <utilisateur> <message> - Envoie un message privé à un utilisateur
 @credits - Affiche les crédits de l'application
-@list - Affiche la liste des utilisateurs connectés
+@list - Affiche la liste des utilisateurs connectés avec leur rôle
 @download <fichier> - Télécharge un fichier depuis le serveur
 @upload <fichier> - Envoie un fichier au serveur
 @uploads - Affiche la liste des fichiers disponibles sur le serveur
