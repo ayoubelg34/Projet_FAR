@@ -8,3 +8,5 @@ bin/*
 !bin/
 
 .DS_Store
+
+./rooms.txt
