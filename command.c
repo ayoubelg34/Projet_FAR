@@ -265,6 +265,20 @@ CommandResult cmd_shutdown(Server *server, Request *req, struct sockaddr_in *cli
     return CMD_SHUTDOWN;
 }
 
+// Fonction d'utilitaire pour obtenir le nom du rôle
+const char* get_role_name(UserRole role) {
+    switch (role) {
+        case ROLE_ADMIN:
+            return "Admin";
+        case ROLE_MODERATOR:
+            return "Modérateur";
+        case ROLE_USER:
+            return "Utilisateur";
+        default:
+            return "Inconnu";
+    }
+}
+
 CommandResult cmd_list(Server *server, Request *req, struct sockaddr_in *client_addr) {
     (void)req;  // Mark parameter as intentionally unused to fix warning
     
@@ -277,8 +291,18 @@ CommandResult cmd_list(Server *server, Request *req, struct sockaddr_in *client_
     int connected_count = 0;
     for (int i = 0; i < server->client_count; i++) {
         if (server->clients[i].connected) {
-            char line[64];
-            sprintf(line, "- %s\n", server->clients[i].username);
+            char line[128]; // Agrandi pour inclure le rôle
+            
+            // Ajouter une indication visuelle pour les utilisateurs muets
+            if (server->clients[i].is_muted) {
+                sprintf(line, "- %s [%s] (muet)\n", 
+                        server->clients[i].username, 
+                        get_role_name(server->clients[i].role));
+            } else {
+                sprintf(line, "- %s [%s]\n", 
+                        server->clients[i].username, 
+                        get_role_name(server->clients[i].role));
+            }
             
             if (strlen(message) + strlen(line) < MAX_MSG_SIZE - 1) {
                 strcat(message, line);
