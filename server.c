@@ -281,15 +281,20 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
     char buffer[1024];
     size_t bytes_read;
     
-    // Ouvrir le fichier
+    // Correct the path to point to bin/uploads
     char filepath[512];
     snprintf(filepath, sizeof(filepath), "./uploads/%s", filename);
+    
+    // Log the file path we're trying to open
+    printf("send_file_to_client: trying to open file: %s\n", filepath);
     
     file = fopen(filepath, "rb");
     if (file == NULL) {
         perror("Erreur lors de l'ouverture du fichier");
         return -1;
     }
+    
+    printf("send_file_to_client: file opened successfully\n");
     
     // Créer une socket TCP
     tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -595,84 +600,14 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
         case REQ_COMMAND: {
             printf("Commande de %s: %s\n", req->sender, req->content);
             
+            // Process the command using the command system
             CommandResult result = process_command(server, req, client_addr);
             
             if (result == CMD_SHUTDOWN) {
-                // La commande shutdown a été exécutée, le serveur va s'arrêter
+                // The shutdown command was executed, the server will stop
                 running = 0;
             }
-            // Traiter les commandes
-            printf("Commande de %s: %s\n", req->sender, req->content);
             
-            // Traiter la commande d'upload de fichier
-            if (strncmp(req->content, "@file_uploaded ", 14) == 0) {
-                char filename[256];
-                sscanf(req->content + 14, "%255s", filename);
-                
-                printf("Fichier %s téléchargé par %s\n", filename, req->sender);
-                
-                // Confirmer la réception
-                init_request(&response, REQ_MESSAGE, "Server", "", 
-                             "Fichier téléchargé avec succès sur le serveur");
-                send_response(server, &response, client_addr);
-            }
-            // Traiter la commande de téléchargement
-            else if (strncmp(req->content, "@download ", 10) == 0) {
-                char filename[256];
-                sscanf(req->content + 10, "%255s", filename);
-                
-                printf("Demande de téléchargement du fichier %s par %s\n", filename, req->sender);
-                
-                // Vérifier l'existence du fichier
-                char filepath[512];
-                snprintf(filepath, sizeof(filepath), "./uploads/%s", filename);
-                
-                if (access(filepath, F_OK) != -1) {
-                    // Le fichier existe, préparer l'envoi
-                    init_request(&response, REQ_MESSAGE, "Server", "", 
-                                "Préparation de l'envoi du fichier...");
-                    send_response(server, &response, client_addr);
-                    
-                    // Lancer le transfert du fichier dans un thread séparé
-                    pthread_t file_send_thread;
-                    FileTransferArgs *args = malloc(sizeof(FileTransferArgs));
-                    if (args) {
-                        strncpy(args->filename, filename, sizeof(args->filename) - 1);
-                        args->filename[sizeof(args->filename) - 1] = '\0';
-                        memcpy(&args->client_addr, client_addr, sizeof(struct sockaddr_in));
-                        args->success = 0;  // Résultat non encore disponible
-                        args->message[0] = '\0';
-                        
-                        printf("Création du thread d'envoi de fichier pour %s\n", filename);
-                        
-                        if (pthread_create(&file_send_thread, NULL, file_send_thread_func, args) != 0) {
-                            perror("Erreur lors de la création du thread d'envoi de fichier");
-                            free(args);
-                            init_request(&response, REQ_MESSAGE, "Server", "", 
-                                        "Erreur serveur lors de l'envoi du fichier");
-                            send_response(server, &response, client_addr);
-                        } else {
-                            pthread_detach(file_send_thread);
-                        }
-                    } else {
-                        init_request(&response, REQ_MESSAGE, "Server", "", 
-                                    "Erreur serveur: mémoire insuffisante");
-                        send_response(server, &response, client_addr);
-                    }
-                } else {
-                    // Le fichier n'existe pas
-                    init_request(&response, REQ_MESSAGE, "Server", "", 
-                                "Fichier non trouvé sur le serveur");
-                    send_response(server, &response, client_addr);
-                }
-            }
-            // Autres commandes
-            else {
-                // Répondre au client que la commande a été reçue
-                init_request(&response, REQ_MESSAGE, "Server", "", 
-                            "Commande reçue mais non supportée");
-                send_response(server, &response, client_addr);
-            }
             break;
         }
         

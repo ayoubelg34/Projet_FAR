@@ -32,6 +32,8 @@ CommandResult cmd_msg(Server *server, Request *req, struct sockaddr_in *client_a
 CommandResult cmd_credits(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_shutdown(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_list(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_download(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_upload(Server *server, Request *req, struct sockaddr_in *client_addr);
 
 // Utilitaires
 char* read_file_content(const char *filename);
