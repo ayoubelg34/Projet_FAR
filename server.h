@@ -1,11 +1,12 @@
 #ifndef SERVER_H
 #define SERVER_H
 
-#include "common.h"
-#include <stdbool.h>
 
-#define MAX_CLIENTS     100
-#define MAX_SALONS      32
+#include <stdbool.h>
+#include "common.h"
+
+
+#define MAX_SALONS 100 
 #define MAX_MEMBRES     32
 #define MAX_NOM_SALON   50
 
@@ -21,8 +22,10 @@ typedef struct {
 //Structure Salon
 typedef struct {
     char nom[MAX_NOM_SALON];
-    char membres[MAX_MEMBRES][50]; // pseudos
-    int  nb_membres;
+    char createur[50];     // pseudo du créateur/admin
+    char **membres;        // tableau dynamique de pseudos
+    int  nb_membres;       // nombre actuel de membres
+    int  membres_capacity; // capacité du tableau membres
 } Salon;
 
 //Structure Server
@@ -30,12 +33,15 @@ typedef struct {
     int socket_fd;
     struct sockaddr_in server_addr;
 
-    ClientInfo clients[MAX_CLIENTS];
+    ClientInfo *clients;
+    int client_capacity;
     int client_count;
     pthread_mutex_t clients_mutex;
 
-    Salon salons[MAX_SALONS];
-    int   nb_salons;
+    Salon *salons;
+    int nb_salons;
+    int salon_capacity;
+
     pthread_mutex_t salons_mutex;
 } Server;
 
@@ -50,7 +56,8 @@ int  add_client(Server *server, const char *username, const char *password,
 void remove_client(Server *server, const char *username);
 
 //Fonctions salon
-int create_room(Server *server, const char *name);
+int create_room(Server *server, const char *name, const char *creator);
+int delete_room(Server *server, const char *name, const char *username);
 int join_room(Server *server, const char *username, const char *room_name);
 int add_user(Server *server, const char *user, const char *room);
 int remove_user(Server *server, const char *user, const char *room);
