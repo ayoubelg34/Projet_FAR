@@ -17,6 +17,7 @@ typedef struct {
     char name[32];
     CommandResult (*handler)(Server *server, Request *req, struct sockaddr_in *client_addr);
     char description[128];
+    UserRole min_role; // Rôle minimum requis pour exécuter la commande
 } Command;
 
 // Initialisation du système de commandes
@@ -34,6 +35,9 @@ CommandResult cmd_shutdown(Server *server, Request *req, struct sockaddr_in *cli
 CommandResult cmd_list(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_download(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_upload(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_promote(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_disconnect(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_uploads(Server *server, Request *req, struct sockaddr_in *client_addr);
 
 // Utilitaires
 char* read_file_content(const char *filename);

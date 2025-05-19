@@ -98,10 +98,10 @@ int add_client(Server *server, const char *username, const char *password,
         return idx;
     }
     
-    // Nouveau client - vérifier s'il y a de la place
+    // Pour un nouveau client
     if (server->client_count >= MAX_CLIENTS) {
         pthread_mutex_unlock(&server->clients_mutex);
-        return -4; // Code d'erreur : serveur plein
+        return -4; // Serveur plein
     }
     
     // Ajouter le nouveau client
@@ -115,6 +115,14 @@ int add_client(Server *server, const char *username, const char *password,
     
     memcpy(&server->clients[idx].addr, addr, sizeof(struct sockaddr_in));
     server->clients[idx].connected = true;
+    
+    // Définir le rôle par défaut comme utilisateur
+    // Premier utilisateur est automatiquement admin
+    if (server->client_count == 1) {
+        server->clients[idx].role = ROLE_ADMIN;
+    } else {
+        server->clients[idx].role = ROLE_USER;
+    }
     
     pthread_mutex_unlock(&server->clients_mutex);
     return idx;
@@ -143,6 +151,72 @@ int send_response(Server *server, Request *res, struct sockaddr_in *client_addr)
     }
     
     return 0;
+}
+
+// Fonction save_users_to_file et load_users_from_file pour sauvegarder et charger les utilisateurs
+void save_users_to_file(Server *server) {
+    FILE *file = fopen("users.dat", "wb");
+    if (!file) {
+        perror("Erreur lors de l'ouverture du fichier de sauvegarde");
+        return;
+    }
+    
+    // Verrouiller la mutex pour accéder à la liste des clients
+    pthread_mutex_lock(&server->clients_mutex);
+    
+    // Écrire le nombre de clients
+    fwrite(&server->client_count, sizeof(int), 1, file);
+    
+    // Écrire les informations de chaque client
+    for (int i = 0; i < server->client_count; i++) {
+        fwrite(&server->clients[i].username, sizeof(server->clients[i].username), 1, file);
+        fwrite(&server->clients[i].password, sizeof(server->clients[i].password), 1, file);
+        fwrite(&server->clients[i].role, sizeof(UserRole), 1, file);
+    }
+    
+    pthread_mutex_unlock(&server->clients_mutex);
+    fclose(file);
+    printf("Utilisateurs sauvegardés avec succès\n");
+}
+
+void load_users_from_file(Server *server) {
+    FILE *file = fopen("users.dat", "rb");
+    if (!file) {
+        printf("Aucun fichier d'utilisateurs trouvé. Un nouveau sera créé.\n");
+        return;
+    }
+    
+    // Lire le nombre de clients
+    int count;
+    if (fread(&count, sizeof(int), 1, file) != 1) {
+        perror("Erreur lors de la lecture du nombre d'utilisateurs");
+        fclose(file);
+        return;
+    }
+    
+    // Verrouiller la mutex
+    pthread_mutex_lock(&server->clients_mutex);
+    
+    // Lire les informations de chaque client
+    for (int i = 0; i < count && i < MAX_CLIENTS; i++) {
+        ClientInfo client;
+        client.connected = false;  // Par défaut non connectés au démarrage
+        
+        if (fread(&client.username, sizeof(client.username), 1, file) != 1 ||
+            fread(&client.password, sizeof(client.password), 1, file) != 1 ||
+            fread(&client.role, sizeof(UserRole), 1, file) != 1) {
+            perror("Erreur lors de la lecture des informations d'un utilisateur");
+            break;
+        }
+        
+        // Copier les informations dans le tableau des clients
+        memcpy(&server->clients[i], &client, sizeof(ClientInfo));
+        server->client_count = i + 1;
+    }
+    
+    pthread_mutex_unlock(&server->clients_mutex);
+    fclose(file);
+    printf("%d utilisateurs chargés depuis le fichier\n", server->client_count);
 }
 
 // Fonction pour gérer le transfert de fichiers via TCP
@@ -693,6 +767,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     
+    // Charger les utilisateurs depuis le fichier
+    load_users_from_file(&server);
+    
     printf("Serveur démarré sur le port %d\n", SERVER_PORT);
     printf("Appuyez sur Ctrl+C pour arrêter le serveur.\n");
     
@@ -738,6 +815,9 @@ int main(void) {
         }
     }
     pthread_mutex_unlock(&server.clients_mutex);
+    
+    // Sauvegarde des utilisateurs APRÈS avoir déverrouillé le mutex
+    save_users_to_file(&server);
     
     // Nettoyage
     close(server.socket_fd);

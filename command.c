@@ -7,17 +7,21 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <libgen.h>
+#include <dirent.h>
 
 // Tableau des commandes disponibles
 static Command commands[] = {
-    {"help", cmd_help, "Affiche la liste des commandes disponibles"},
-    {"ping", cmd_ping, "Test de connectivité avec le serveur"},
-    {"msg", cmd_msg, "Envoie un message privé (@msg <user> <message>)"},
-    {"credits", cmd_credits, "Affiche les crédits de l'application"},
-    {"shutdown", cmd_shutdown, "Arrête le serveur (admin uniquement)"},
-    {"list", cmd_list, "Affiche la liste des utilisateurs connectés"},
-    {"download", cmd_download, "Télécharge un des fichiers du serveur pour le client"},
-    {"upload", cmd_upload, "Envoie un fichier sur le serveur"}
+    {"help", cmd_help, "Affiche la liste des commandes disponibles", ROLE_USER},
+    {"ping", cmd_ping, "Test de connectivité avec le serveur", ROLE_USER},
+    {"msg", cmd_msg, "Envoie un message privé (@msg <user> <message>)", ROLE_USER},
+    {"credits", cmd_credits, "Affiche les crédits de l'application", ROLE_USER},
+    {"shutdown", cmd_shutdown, "Arrête le serveur (admin uniquement)", ROLE_ADMIN},
+    {"list", cmd_list, "Affiche la liste des utilisateurs connectés", ROLE_USER},
+    {"download", cmd_download, "Télécharge un des fichiers du serveur pour le client", ROLE_USER},
+    {"upload", cmd_upload, "Envoie un fichier sur le serveur", ROLE_USER},
+    {"promote", cmd_promote, "Promeut un utilisateur au rang de modérateur (admin uniquement)", ROLE_ADMIN},
+    {"disconnect", cmd_disconnect, "Déconnecte explicitement du serveur", ROLE_USER},
+    {"uploads", cmd_uploads, "Affiche la liste des fichiers disponibles sur le serveur", ROLE_USER}
 };
 
 static int command_count = sizeof(commands) / sizeof(Command);
@@ -94,16 +98,42 @@ char* read_file_content(const char *filename) {
 CommandResult process_command(Server *server, Request *req, struct sockaddr_in *client_addr) {
     char *cmd_name = get_command_name(req->content);
     
+    // Trouver l'utilisateur
+    int client_idx = find_client_by_username(server, req->sender);
+    if (client_idx < 0) {
+        // Utilisateur non trouvé
+        Request response;
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Erreur: Vous n'êtes pas connecté au serveur.");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Obtenir le rôle de l'utilisateur
+    UserRole user_role = server->clients[client_idx].role;
+    
     // Chercher la commande dans le tableau
     for (int i = 0; i < command_count; i++) {
         if (strcmp(cmd_name, commands[i].name) == 0) {
+            // Vérifier les droits d'accès
+            if (user_role < commands[i].min_role) {
+                // Droits insuffisants
+                Request response;
+                init_request(&response, REQ_MESSAGE, "Server", "", 
+                             "Erreur: Vous n'avez pas les droits suffisants pour exécuter cette commande.");
+                send_response(server, &response, client_addr);
+                return CMD_ERROR;
+            }
+            
+            // Exécuter la commande
             return commands[i].handler(server, req, client_addr);
         }
     }
     
     // Commande inconnue
     Request response;
-    init_request(&response, REQ_MESSAGE, "Server", "", "Commande inconnue. Tapez @help pour voir les commandes disponibles.");
+    init_request(&response, REQ_MESSAGE, "Server", "", 
+                 "Commande inconnue. Tapez @help pour voir les commandes disponibles.");
     send_response(server, &response, client_addr);
     
     return CMD_ERROR;
@@ -415,3 +445,165 @@ CommandResult cmd_upload(Server *server, Request *req, struct sockaddr_in *clien
     
     return CMD_SUCCESS;
 }
+
+CommandResult cmd_promote(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    Request response;
+    char *args = get_command_args(req->content);
+    
+    // Vérifier les arguments
+    if (args[0] == '\0') {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Usage: @promote <utilisateur> - Promouvoir un utilisateur au rang de modérateur");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Extraire le nom d'utilisateur
+    char username[50];
+    sscanf(args, "%49s", username);
+    
+    // Trouver l'utilisateur à promouvoir
+    pthread_mutex_lock(&server->clients_mutex);
+    int user_idx = find_client_by_username(server, username);
+    
+    if (user_idx < 0) {
+        pthread_mutex_unlock(&server->clients_mutex);
+        char error[128];
+        snprintf(error, sizeof(error), "Utilisateur '%s' non trouvé", username);
+        init_request(&response, REQ_MESSAGE, "Server", "", error);
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Vérifier s'il est déjà modérateur ou admin
+    if (server->clients[user_idx].role >= ROLE_MODERATOR) {
+        pthread_mutex_unlock(&server->clients_mutex);
+        char error[128];
+        snprintf(error, sizeof(error), "L'utilisateur '%s' est déjà modérateur ou administrateur", username);
+        init_request(&response, REQ_MESSAGE, "Server", "", error);
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Promouvoir l'utilisateur
+    server->clients[user_idx].role = ROLE_MODERATOR;
+    pthread_mutex_unlock(&server->clients_mutex);
+    
+    // Envoyer confirmation
+    char confirm[128];
+    snprintf(confirm, sizeof(confirm), "L'utilisateur '%s' a été promu au rang de modérateur", username);
+    init_request(&response, REQ_MESSAGE, "Server", "", confirm);
+    send_response(server, &response, client_addr);
+    
+    // Notifier l'utilisateur promu
+    char notify[128];
+    snprintf(notify, sizeof(notify), "Vous avez été promu au rang de modérateur par '%s'", req->sender);
+    init_request(&response, REQ_MESSAGE, "Server", "", notify);
+    send_response(server, &response, &server->clients[user_idx].addr);
+    
+    return CMD_SUCCESS;
+}
+
+CommandResult cmd_disconnect(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    // Trouver l'utilisateur
+    int client_idx = find_client_by_username(server, req->sender);
+    if (client_idx < 0) {
+        // Étrange, l'utilisateur n'est pas trouvé
+        Request response;
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Erreur interne: utilisateur non trouvé");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Envoyer confirmation à l'utilisateur
+    Request response;
+    init_request(&response, REQ_MESSAGE, "Server", "", 
+                 "Déconnexion en cours. Au revoir!");
+    send_response(server, &response, client_addr);
+    
+    // Marquer l'utilisateur comme déconnecté
+    pthread_mutex_lock(&server->clients_mutex);
+    server->clients[client_idx].connected = false;
+    pthread_mutex_unlock(&server->clients_mutex);
+    
+    // Annoncer la déconnexion aux autres clients
+    char announce[100];
+    sprintf(announce, "%s a quitté le chat", req->sender);
+    init_request(&response, REQ_MESSAGE, "Server", "", announce);
+    
+    pthread_mutex_lock(&server->clients_mutex);
+    for (int i = 0; i < server->client_count; i++) {
+        if (i != client_idx && server->clients[i].connected) {
+            send_response(server, &response, &server->clients[i].addr);
+        }
+    }
+    pthread_mutex_unlock(&server->clients_mutex);
+    
+    return CMD_SUCCESS;
+}
+
+CommandResult cmd_uploads(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    (void)req;  // Pour éviter l'avertissement de paramètre non utilisé
+    
+    Request response;
+    char message[MAX_MSG_SIZE] = "Fichiers disponibles sur le serveur:\n";
+    
+    // Ouvrir le répertoire
+    DIR *dir = opendir("./uploads");
+    if (!dir) {
+        // Si le répertoire n'existe pas, le créer et envoyer message vide
+        mkdir("./uploads", 0755);
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Aucun fichier disponible sur le serveur");
+        send_response(server, &response, client_addr);
+        return CMD_SUCCESS;
+    }
+    
+    // Lire les entrées du répertoire
+    struct dirent *entry;
+    int file_count = 0;
+    
+    while ((entry = readdir(dir)) != NULL) {
+        // Ignorer "." et ".."
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        
+        // Ajouter le nom du fichier à la liste
+        char line[256];
+        snprintf(line, sizeof(line), "- %s\n", entry->d_name);
+        
+        // Vérifier si l'ajout dépasserait la taille maximale
+        if (strlen(message) + strlen(line) < MAX_MSG_SIZE - 64) {
+            strcat(message, line);
+            file_count++;
+        } else {
+            // Trop de fichiers, ajouter message de troncation
+            strcat(message, "...(liste tronquée)\n");
+            break;
+        }
+    }
+    
+    closedir(dir);
+    
+    // Si aucun fichier trouvé
+    if (file_count == 0) {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Aucun fichier disponible sur le serveur");
+    } else {
+        // Ajouter récapitulatif
+        char summary[64];
+        snprintf(summary, sizeof(summary), "\nTotal: %d fichier(s)\n", file_count);
+        strcat(message, summary);
+        
+        // Ajouter instruction pour téléchargement
+        strcat(message, "Pour télécharger un fichier: @download <nom_fichier>");
+        
+        init_request(&response, REQ_MESSAGE, "Server", "", message);
+    }
+    
+    send_response(server, &response, client_addr);
+    return CMD_SUCCESS;
+}
+

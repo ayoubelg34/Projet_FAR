@@ -1,12 +1,22 @@
 === AIDE UTILISATEUR ===
 
-Commandes disponibles :
-
+Commandes disponibles pour tous les utilisateurs :
 @help - Affiche cette aide
 @ping - Test de connectivité (le serveur répond "pong")
 @msg <utilisateur> <message> - Envoie un message privé à un utilisateur
 @credits - Affiche les crédits de l'application
-@shutdown - Arrête le serveur (réservé aux administrateurs)
+@list - Affiche la liste des utilisateurs connectés
+@download <fichier> - Télécharge un fichier depuis le serveur
+@upload <fichier> - Envoie un fichier au serveur
+@uploads - Affiche la liste des fichiers disponibles sur le serveur
+@disconnect - Déconnecte explicitement du serveur
+
+Commandes pour les modérateurs :
+[Aucune commande spécifique pour le moment]
+
+Commandes pour les administrateurs uniquement :
+@shutdown - Arrête le serveur
+@promote <utilisateur> - Promeut un utilisateur au rang de modérateur
 
 Navigation :
 - Tapez simplement votre message pour l'envoyer à tous les utilisateurs connectés

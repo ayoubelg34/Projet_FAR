@@ -7,12 +7,20 @@
 
 #define MAX_CLIENTS 100
 
+// Enumération pour les rôles d'utilisateur
+typedef enum {
+    ROLE_USER,
+    ROLE_MODERATOR,
+    ROLE_ADMIN
+} UserRole;
+
 // Structure pour stocker les informations des clients connectés
 typedef struct {
     char username[50];
     char password[50];
     struct sockaddr_in addr;
     bool connected;
+    UserRole role;
 } ClientInfo;
 
 // Structure du serveur
