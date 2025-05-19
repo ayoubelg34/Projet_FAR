@@ -38,6 +38,8 @@ CommandResult cmd_upload(Server *server, Request *req, struct sockaddr_in *clien
 CommandResult cmd_promote(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_disconnect(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_uploads(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_mute(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_unmute(Server *server, Request *req, struct sockaddr_in *client_addr);
 
 // Utilitaires
 char* read_file_content(const char *filename);

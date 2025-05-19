@@ -94,6 +94,17 @@ int add_client(Server *server, const char *username, const char *password,
         memcpy(&server->clients[idx].addr, addr, sizeof(struct sockaddr_in));
         server->clients[idx].connected = true;
         
+        // Vérifier si la période de mute est terminée
+        if (server->clients[idx].is_muted) {
+            time_t now = time(NULL);
+            if (now >= server->clients[idx].mute_until) {
+                // Le mute a expiré
+                server->clients[idx].is_muted = false;
+                server->clients[idx].mute_until = 0;
+                printf("Le mode muet de l'utilisateur %s a expiré pendant son absence\n", username);
+            }
+        }
+        
         pthread_mutex_unlock(&server->clients_mutex);
         return idx;
     }
@@ -115,6 +126,10 @@ int add_client(Server *server, const char *username, const char *password,
     
     memcpy(&server->clients[idx].addr, addr, sizeof(struct sockaddr_in));
     server->clients[idx].connected = true;
+    
+    // Initialiser les champs relatifs au mute
+    server->clients[idx].is_muted = false;
+    server->clients[idx].mute_until = 0;
     
     // Définir le rôle par défaut comme utilisateur
     // Premier utilisateur est automatiquement admin
@@ -172,6 +187,8 @@ void save_users_to_file(Server *server) {
         fwrite(&server->clients[i].username, sizeof(server->clients[i].username), 1, file);
         fwrite(&server->clients[i].password, sizeof(server->clients[i].password), 1, file);
         fwrite(&server->clients[i].role, sizeof(UserRole), 1, file);
+        fwrite(&server->clients[i].is_muted, sizeof(bool), 1, file);
+        fwrite(&server->clients[i].mute_until, sizeof(time_t), 1, file);
     }
     
     pthread_mutex_unlock(&server->clients_mutex);
@@ -207,6 +224,26 @@ void load_users_from_file(Server *server) {
             fread(&client.role, sizeof(UserRole), 1, file) != 1) {
             perror("Erreur lors de la lecture des informations d'un utilisateur");
             break;
+        }
+        
+        // Tentative de lecture des nouveaux champs (compatibilité avec anciennes versions)
+        client.is_muted = false;
+        client.mute_until = 0;
+        
+        fread(&client.is_muted, sizeof(bool), 1, file);
+        fread(&client.mute_until, sizeof(time_t), 1, file);
+        
+        // Vérifier si un utilisateur encore "muet" devrait toujours l'être
+        if (client.is_muted) {
+            time_t now = time(NULL);
+            if (now >= client.mute_until) {
+                client.is_muted = false;
+                printf("Le mode muet de l'utilisateur %s a expiré\n", client.username);
+            } else {
+                int minutes_left = (int)((client.mute_until - now) / 60) + 1;
+                printf("L'utilisateur %s est muet pour encore %d minute(s)\n", 
+                       client.username, minutes_left);
+            }
         }
         
         // Copier les informations dans le tableau des clients
@@ -558,6 +595,54 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
     pthread_setspecific(server_key, server);
     
     Request response;
+    
+    // Pour les messages normaux ou les commandes, vérifier si l'utilisateur est muet
+    if (req->type == REQ_MESSAGE || req->type == REQ_COMMAND) {
+        pthread_mutex_lock(&server->clients_mutex);
+        int client_idx = find_client_by_username(server, req->sender);
+        
+        if (client_idx >= 0 && server->clients[client_idx].is_muted) {
+            // Vérifier si la période de mute est terminée
+            time_t now = time(NULL);
+            if (now < server->clients[client_idx].mute_until) {
+                // Calculer le temps restant
+                int minutes_left = (int)((server->clients[client_idx].mute_until - now) / 60) + 1;
+                
+                pthread_mutex_unlock(&server->clients_mutex);
+                
+                // Si ce n'est pas une commande @help ou @credits (qu'on autorise même en mode muet)
+                if (req->type != REQ_COMMAND || 
+                    (strncmp(req->content, "@help", 5) != 0 && 
+                     strncmp(req->content, "@credits", 8) != 0 &&
+                     strncmp(req->content, "@disconnect", 11) != 0)) {
+                    // Informer l'utilisateur qu'il est muet
+                    char mute_msg[128];
+                    snprintf(mute_msg, sizeof(mute_msg), 
+                             "Vous êtes actuellement en mode muet. Vous pourrez parler à nouveau dans %d minute(s).", 
+                             minutes_left);
+                    init_request(&response, REQ_MESSAGE, "Server", "", mute_msg);
+                    send_response(server, &response, client_addr);
+                    return;
+                }
+            } else {
+                // La période de mute est terminée, réactiver l'utilisateur
+                server->clients[client_idx].is_muted = false;
+                server->clients[client_idx].mute_until = 0;
+                
+                // Notifier l'utilisateur
+                pthread_mutex_unlock(&server->clients_mutex);
+                
+                char notify[128];
+                snprintf(notify, sizeof(notify), "Votre mode muet est terminé. Vous pouvez à nouveau parler.");
+                init_request(&response, REQ_MESSAGE, "Server", "", notify);
+                send_response(server, &response, client_addr);
+                
+                // Continuer le traitement normal du message
+            }
+        } else {
+            pthread_mutex_unlock(&server->clients_mutex);
+        }
+    }
     
     switch (req->type) {
         case REQ_CONNECT: {

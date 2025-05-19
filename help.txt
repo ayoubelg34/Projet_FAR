@@ -12,7 +12,8 @@ Commandes disponibles pour tous les utilisateurs :
 @disconnect - Déconnecte explicitement du serveur
 
 Commandes pour les modérateurs :
-[Aucune commande spécifique pour le moment]
+@mute <utilisateur> [minutes] - Rend muet un utilisateur pendant une durée spécifiée (10 minutes par défaut)
+@unmute <utilisateur> - Annule le mode muet d'un utilisateur
 
 Commandes pour les administrateurs uniquement :
 @shutdown - Arrête le serveur

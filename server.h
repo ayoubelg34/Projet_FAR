@@ -21,6 +21,8 @@ typedef struct {
     struct sockaddr_in addr;
     bool connected;
     UserRole role;
+    bool is_muted;         // Indique si l'utilisateur est muet
+    time_t mute_until;     // Heure jusqu'à laquelle l'utilisateur est muet
 } ClientInfo;
 
 // Structure du serveur

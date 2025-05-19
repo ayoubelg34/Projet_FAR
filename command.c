@@ -21,7 +21,9 @@ static Command commands[] = {
     {"upload", cmd_upload, "Envoie un fichier sur le serveur", ROLE_USER},
     {"promote", cmd_promote, "Promeut un utilisateur au rang de modérateur (admin uniquement)", ROLE_ADMIN},
     {"disconnect", cmd_disconnect, "Déconnecte explicitement du serveur", ROLE_USER},
-    {"uploads", cmd_uploads, "Affiche la liste des fichiers disponibles sur le serveur", ROLE_USER}
+    {"uploads", cmd_uploads, "Affiche la liste des fichiers disponibles sur le serveur", ROLE_USER},
+    {"mute", cmd_mute, "Rend muet un utilisateur pendant une durée spécifiée (@mute <user> <minutes>)", ROLE_MODERATOR},
+    {"unmute", cmd_unmute, "Annule le mode muet d'un utilisateur (@unmute <user>)", ROLE_MODERATOR}
 };
 
 static int command_count = sizeof(commands) / sizeof(Command);
@@ -607,3 +609,126 @@ CommandResult cmd_uploads(Server *server, Request *req, struct sockaddr_in *clie
     return CMD_SUCCESS;
 }
 
+CommandResult cmd_mute(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    Request response;
+    char *args = get_command_args(req->content);
+    
+    // Vérifier les arguments
+    char username[50];
+    int minutes = 10; // Durée par défaut: 10 minutes
+    
+    if (sscanf(args, "%49s %d", username, &minutes) < 1) {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Usage: @mute <utilisateur> [minutes] - Rend muet un utilisateur (10 minutes par défaut)");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Limiter la durée maximale (60 minutes = 1 heure)
+    if (minutes > 60) {
+        minutes = 60;
+    } else if (minutes < 1) {
+        minutes = 1; // Minimum 1 minute
+    }
+    
+    // Trouver l'utilisateur à rendre muet
+    pthread_mutex_lock(&server->clients_mutex);
+    int user_idx = find_client_by_username(server, username);
+    
+    if (user_idx < 0) {
+        pthread_mutex_unlock(&server->clients_mutex);
+        char error[128];
+        snprintf(error, sizeof(error), "Utilisateur '%s' non trouvé", username);
+        init_request(&response, REQ_MESSAGE, "Server", "", error);
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Ne pas permettre de rendre muet un administrateur ou un modérateur
+    if (server->clients[user_idx].role >= ROLE_MODERATOR) {
+        pthread_mutex_unlock(&server->clients_mutex);
+        char error[128];
+        snprintf(error, sizeof(error), "Vous ne pouvez pas rendre muet un modérateur ou un administrateur");
+        init_request(&response, REQ_MESSAGE, "Server", "", error);
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Rendre l'utilisateur muet
+    server->clients[user_idx].is_muted = true;
+    server->clients[user_idx].mute_until = time(NULL) + (minutes * 60);
+    
+    pthread_mutex_unlock(&server->clients_mutex);
+    
+    // Envoyer confirmation
+    char confirm[128];
+    snprintf(confirm, sizeof(confirm), "L'utilisateur '%s' a été rendu muet pendant %d minutes", username, minutes);
+    init_request(&response, REQ_MESSAGE, "Server", "", confirm);
+    send_response(server, &response, client_addr);
+    
+    // Notifier l'utilisateur concerné
+    char notify[128];
+    snprintf(notify, sizeof(notify), "Vous avez été rendu muet par '%s' pendant %d minutes", req->sender, minutes);
+    init_request(&response, REQ_MESSAGE, "Server", "", notify);
+    send_response(server, &response, &server->clients[user_idx].addr);
+    
+    return CMD_SUCCESS;
+}
+
+CommandResult cmd_unmute(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    Request response;
+    char *args = get_command_args(req->content);
+    
+    // Vérifier les arguments
+    char username[50];
+    
+    if (sscanf(args, "%49s", username) != 1) {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Usage: @unmute <utilisateur> - Annule le mode muet d'un utilisateur");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Trouver l'utilisateur
+    pthread_mutex_lock(&server->clients_mutex);
+    int user_idx = find_client_by_username(server, username);
+    
+    if (user_idx < 0) {
+        pthread_mutex_unlock(&server->clients_mutex);
+        char error[128];
+        snprintf(error, sizeof(error), "Utilisateur '%s' non trouvé", username);
+        init_request(&response, REQ_MESSAGE, "Server", "", error);
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Vérifier si l'utilisateur est actuellement muet
+    if (!server->clients[user_idx].is_muted) {
+        pthread_mutex_unlock(&server->clients_mutex);
+        char error[128];
+        snprintf(error, sizeof(error), "L'utilisateur '%s' n'est pas muet", username);
+        init_request(&response, REQ_MESSAGE, "Server", "", error);
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Annuler le mode muet
+    server->clients[user_idx].is_muted = false;
+    server->clients[user_idx].mute_until = 0;
+    
+    pthread_mutex_unlock(&server->clients_mutex);
+    
+    // Envoyer confirmation
+    char confirm[128];
+    snprintf(confirm, sizeof(confirm), "Le mode muet de l'utilisateur '%s' a été annulé", username);
+    init_request(&response, REQ_MESSAGE, "Server", "", confirm);
+    send_response(server, &response, client_addr);
+    
+    // Notifier l'utilisateur concerné
+    char notify[128];
+    snprintf(notify, sizeof(notify), "Votre mode muet a été annulé par '%s'", req->sender);
+    init_request(&response, REQ_MESSAGE, "Server", "", notify);
+    send_response(server, &response, &server->clients[user_idx].addr);
+    
+    return CMD_SUCCESS;
+}
