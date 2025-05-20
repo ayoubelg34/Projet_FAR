@@ -20,12 +20,9 @@ void init_request(Request *req, RequestType type, const char *sender,
 
 void handle_sigint(int sig) {
     printf("\nInterruption reçue (signal %d). Arrêt en cours...\n", sig);
+    // Just set the running flag to 0, don't close the socket here
+    // This will allow the main thread to send shutdown messages before closing
     running = 0;
-    
-    // Fermer la socket globale si elle existe
-    if (global_socket_fd >= 0) {
-        close(global_socket_fd);
-    }
 }
 
 // Génère un nom de fichier unique quand un fichier du même nom existe déjà
