@@ -631,6 +631,7 @@ void *file_send_thread_func(void *arg) {
 // Clé pour stocker le pointeur serveur dans les threads
 pthread_key_t server_key;
 
+
 void process_request(Server *server, Request *req, struct sockaddr_in *client_addr) {
     // Stocker le pointeur serveur pour les threads de fichier
     pthread_setspecific(server_key, server);
@@ -795,49 +796,17 @@ void process_request(Server *server, Request *req, struct sockaddr_in *client_ad
             }
             break;
         }
-
         
         case REQ_COMMAND: {
-            char *cmd = req->content;
-            printf("Commande reçue de %s: %s\n", req->sender, cmd);           
-            if (strncmp(cmd, "@create ", 8) == 0) {
-                if (create_room(server, cmd + 8, req->sender) == 0)
-                    init_request(&response, REQ_MESSAGE, "Server", "", "Salon créé avec succès.");
-                else
-                    init_request(&response, REQ_MESSAGE, "Server", "", "Erreur : salon existe déjà.");
-
-            } else if (strncmp(cmd, "@join ", 6) == 0) {
-                if (join_room(server, req->sender, cmd + 6) == 0)
-                    init_request(&response, REQ_MESSAGE, "Server", "", "Vous avez rejoint le salon.");
-                else
-                    init_request(&response, REQ_MESSAGE, "Server", "", "Erreur : salon introuvable ou plein.");
-
-            } else if (strcmp(cmd, "@leave") == 0) {
-                if (remove_user(server, req->sender, NULL) == 0)
-                    init_request(&response, REQ_MESSAGE, "Server", "", "Vous avez quitté le salon.");
-                else
-                    init_request(&response, REQ_MESSAGE, "Server", "", "Vous n'étiez dans aucun salon.");
-
-            } else if (strncmp(cmd, "@delete ", 8) == 0) {
-                if (delete_room(server, cmd + 8, req->sender) == 0)
-                    init_request(&response, REQ_MESSAGE, "Server", "", "Salon supprimé avec succès.");
-                else
-                    init_request(&response, REQ_MESSAGE, "Server", "", "Erreur : vous n'êtes pas le créateur du salon ou salon inexistant.");
-
-            } else {
-                        // Process the command using the command system
+            // Toutes les commandes sont maintenant traitées par le système de commandes
             CommandResult result = process_command(server, req, client_addr);
             
             if (result == CMD_SHUTDOWN) {
                 // The shutdown command was executed, the server will stop
                 running = 0;
             }
-            }
-
-            send_response(server, &response, client_addr);
             break;
         }
-
         
         default:
             // Type de requête inconnu

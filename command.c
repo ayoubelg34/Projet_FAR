@@ -21,9 +21,15 @@ static Command commands[] = {
     {"upload", cmd_upload, "Envoie un fichier sur le serveur", ROLE_USER},
     {"promote", cmd_promote, "Promeut un utilisateur au rang de modérateur (admin uniquement)", ROLE_ADMIN},
     {"disconnect", cmd_disconnect, "Déconnecte explicitement du serveur", ROLE_USER},
-    {"uploads", cmd_uploads, "Affiche la liste des fichiers disponibles sur le serveur", ROLE_USER},
+    {"files", cmd_files, "Affiche la liste des fichiers disponibles sur le serveur", ROLE_USER},
     {"mute", cmd_mute, "Rend muet un utilisateur pendant une durée spécifiée (@mute <user> <minutes>)", ROLE_MODERATOR},
-    {"unmute", cmd_unmute, "Annule le mode muet d'un utilisateur (@unmute <user>)", ROLE_MODERATOR}
+    {"unmute", cmd_unmute, "Annule le mode muet d'un utilisateur (@unmute <user>)", ROLE_MODERATOR},
+    {"create", cmd_create, "Crée un nouveau salon (@create <nom_salon>)", ROLE_USER},
+    {"join", cmd_join, "Rejoint un salon existant (@join <nom_salon>)", ROLE_USER},
+    {"leave", cmd_leave, "Quitte le salon courant", ROLE_USER},
+    {"delete", cmd_delete, "Supprime un salon (créateur uniquement) (@delete <nom_salon>)", ROLE_USER},
+    {"rooms", cmd_rooms, "Affiche la liste des salons disponibles", ROLE_USER},
+    {"info", cmd_info, "Affiche les informations sur votre état actuel", ROLE_USER}
 };
 
 static int command_count = sizeof(commands) / sizeof(Command);
@@ -95,7 +101,6 @@ char* read_file_content(const char *filename) {
     fclose(file);
     return content;
 }
-
 
 CommandResult process_command(Server *server, Request *req, struct sockaddr_in *client_addr) {
     char *cmd_name = get_command_name(req->content);
@@ -324,6 +329,89 @@ CommandResult cmd_list(Server *server, Request *req, struct sockaddr_in *client_
     pthread_mutex_unlock(&server->clients_mutex);
     
     init_request(&response, REQ_MESSAGE, "Server", "", message);
+    send_response(server, &response, client_addr);
+    return CMD_SUCCESS;
+}
+
+CommandResult cmd_info(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    (void)req;  // Paramètre non utilisé
+    
+    Request response;
+    
+    // Trouver l'utilisateur
+    int client_idx = find_client_by_username(server, req->sender);
+    if (client_idx < 0) {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Erreur: Utilisateur non trouvé.");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    pthread_mutex_lock(&server->clients_mutex);
+    
+    char info_msg[MAX_MSG_SIZE];
+    char current_room[MAX_NOM_SALON];
+    strncpy(current_room, server->clients[client_idx].salon_courant, MAX_NOM_SALON - 1);
+    current_room[MAX_NOM_SALON - 1] = '\0';
+    
+    // Informations de base
+    snprintf(info_msg, sizeof(info_msg), 
+             "=== INFORMATIONS UTILISATEUR ===\n"
+             "Pseudonyme: %s\n"
+             "Rôle: %s\n", 
+             server->clients[client_idx].username,
+             get_role_name(server->clients[client_idx].role));
+    
+    // Statut de mute
+    if (server->clients[client_idx].is_muted) {
+        time_t now = time(NULL);
+        if (now < server->clients[client_idx].mute_until) {
+            int minutes_left = (int)((server->clients[client_idx].mute_until - now) / 60) + 1;
+            char mute_info[128];
+            snprintf(mute_info, sizeof(mute_info), "Statut: MUET (encore %d minute(s))\n", minutes_left);
+            strcat(info_msg, mute_info);
+        } else {
+            strcat(info_msg, "Statut: Actif\n");
+        }
+    } else {
+        strcat(info_msg, "Statut: Actif\n");
+    }
+    
+    // Salon courant
+    if (strlen(current_room) > 0) {
+        char room_info[128];
+        snprintf(room_info, sizeof(room_info), "Salon courant: %s\n", current_room);
+        strcat(info_msg, room_info);
+        
+        // Trouver des informations sur le salon
+        pthread_mutex_lock(&server->salons_mutex);
+        for (int i = 0; i < server->nb_salons; i++) {
+            if (strcmp(server->salons[i].nom, current_room) == 0) {
+                char salon_details[128];
+                snprintf(salon_details, sizeof(salon_details), 
+                         "Membres dans le salon: %d\n"
+                         "Créateur du salon: %s\n",
+                         server->salons[i].nb_membres,
+                         server->salons[i].createur);
+                strcat(info_msg, salon_details);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&server->salons_mutex);
+    } else {
+        strcat(info_msg, "Salon courant: Aucun (vous devez rejoindre un salon pour envoyer des messages)\n");
+    }
+    
+    // Adresse IP
+    char ip_info[64];
+    snprintf(ip_info, sizeof(ip_info), "Adresse IP: %s:%d", 
+             inet_ntoa(server->clients[client_idx].addr.sin_addr),
+             ntohs(server->clients[client_idx].addr.sin_port));
+    strcat(info_msg, ip_info);
+    
+    pthread_mutex_unlock(&server->clients_mutex);
+    
+    init_request(&response, REQ_MESSAGE, "Server", "", info_msg);
     send_response(server, &response, client_addr);
     return CMD_SUCCESS;
 }
@@ -569,7 +657,7 @@ CommandResult cmd_disconnect(Server *server, Request *req, struct sockaddr_in *c
     return CMD_SUCCESS;
 }
 
-CommandResult cmd_uploads(Server *server, Request *req, struct sockaddr_in *client_addr) {
+CommandResult cmd_files(Server *server, Request *req, struct sockaddr_in *client_addr) {
     (void)req;  // Pour éviter l'avertissement de paramètre non utilisé
     
     Request response;
@@ -754,5 +842,205 @@ CommandResult cmd_unmute(Server *server, Request *req, struct sockaddr_in *clien
     init_request(&response, REQ_MESSAGE, "Server", "", notify);
     send_response(server, &response, &server->clients[user_idx].addr);
     
+    return CMD_SUCCESS;
+}
+
+// === COMMANDES RELATIVES AUX SALONS ===
+
+CommandResult cmd_create(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    Request response;
+    char *args = get_command_args(req->content);
+    
+    // Vérifier les arguments
+    if (args[0] == '\0') {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Usage: @create <nom_salon> - Crée un nouveau salon");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Extraire le nom du salon
+    char room_name[MAX_NOM_SALON];
+    sscanf(args, "%49s", room_name);
+    
+    // Créer le salon
+    if (create_room(server, room_name, req->sender) == 0) {
+        // Le créateur rejoint automatiquement son salon
+        join_room(server, req->sender, room_name);
+        
+        char success_msg[128];
+        snprintf(success_msg, sizeof(success_msg), "Salon '%s' créé avec succès. Vous l'avez automatiquement rejoint.", room_name);
+        init_request(&response, REQ_MESSAGE, "Server", "", success_msg);
+    } else {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "Erreur: Le salon '%s' existe déjà.", room_name);
+        init_request(&response, REQ_MESSAGE, "Server", "", error_msg);
+    }
+    
+    send_response(server, &response, client_addr);
+    return CMD_SUCCESS;
+}
+
+CommandResult cmd_join(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    Request response;
+    char *args = get_command_args(req->content);
+    
+    // Vérifier les arguments
+    if (args[0] == '\0') {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Usage: @join <nom_salon> - Rejoint un salon existant");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Extraire le nom du salon
+    char room_name[MAX_NOM_SALON];
+    sscanf(args, "%49s", room_name);
+    
+    // Rejoindre le salon
+    if (join_room(server, req->sender, room_name) == 0) {
+        char success_msg[128];
+        snprintf(success_msg, sizeof(success_msg), "Vous avez rejoint le salon '%s'.", room_name);
+        init_request(&response, REQ_MESSAGE, "Server", "", success_msg);
+        
+        send_response(server, &response, client_addr);
+        
+        // Annoncer l'arrivée dans le salon
+        char announce_msg[128];
+        snprintf(announce_msg, sizeof(announce_msg), "%s a rejoint le salon", req->sender);
+        init_request(&response, REQ_MESSAGE, "Server", "", announce_msg);
+        broadcast_room(server, room_name, &response, req->sender);
+    } else {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Erreur: Salon introuvable ou plein.");
+        send_response(server, &response, client_addr);
+    }
+    
+    return CMD_SUCCESS;
+}
+
+CommandResult cmd_leave(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    Request response;
+    
+    // Trouver l'utilisateur
+    int client_idx = find_client_by_username(server, req->sender);
+    if (client_idx < 0) {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Erreur: Utilisateur non trouvé.");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Récupérer le nom du salon courant
+    char current_room[MAX_NOM_SALON];
+    pthread_mutex_lock(&server->clients_mutex);
+    strncpy(current_room, server->clients[client_idx].salon_courant, MAX_NOM_SALON - 1);
+    current_room[MAX_NOM_SALON - 1] = '\0';
+    pthread_mutex_unlock(&server->clients_mutex);
+    
+    // Vérifier si l'utilisateur est dans un salon
+    if (strlen(current_room) == 0) {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Vous n'êtes dans aucun salon.");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Annoncer le départ dans le salon
+    char announce_msg[128];
+    snprintf(announce_msg, sizeof(announce_msg), "%s a quitté le salon", req->sender);
+    init_request(&response, REQ_MESSAGE, "Server", "", announce_msg);
+    broadcast_room(server, current_room, &response, req->sender);
+    
+    // Quitter le salon
+    if (remove_user(server, req->sender, NULL) == 0) {
+        char success_msg[128];
+        snprintf(success_msg, sizeof(success_msg), "Vous avez quitté le salon '%s'.", current_room);
+        init_request(&response, REQ_MESSAGE, "Server", "", success_msg);
+    } else {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Erreur lors de la sortie du salon.");
+    }
+    
+    send_response(server, &response, client_addr);
+    return CMD_SUCCESS;
+}
+
+CommandResult cmd_delete(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    Request response;
+    char *args = get_command_args(req->content);
+    
+    // Vérifier les arguments
+    if (args[0] == '\0') {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Usage: @delete <nom_salon> - Supprime un salon (créateur uniquement)");
+        send_response(server, &response, client_addr);
+        return CMD_ERROR;
+    }
+    
+    // Extraire le nom du salon
+    char room_name[MAX_NOM_SALON];
+    sscanf(args, "%49s", room_name);
+    
+    // Supprimer le salon
+    int result = delete_room(server, room_name, req->sender);
+    
+    if (result == 0) {
+        char success_msg[128];
+        snprintf(success_msg, sizeof(success_msg), "Salon '%s' supprimé avec succès.", room_name);
+        init_request(&response, REQ_MESSAGE, "Server", "", success_msg);
+    } else if (result == -2) {
+        init_request(&response, REQ_MESSAGE, "Server", "", 
+                     "Erreur: Vous n'êtes pas le créateur de ce salon.");
+    } else {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "Erreur: Le salon '%s' n'existe pas.", room_name);
+        init_request(&response, REQ_MESSAGE, "Server", "", error_msg);
+    }
+    
+    send_response(server, &response, client_addr);
+    return CMD_SUCCESS;
+}
+
+CommandResult cmd_rooms(Server *server, Request *req, struct sockaddr_in *client_addr) {
+    (void)req;  // Paramètre non utilisé
+    
+    Request response;
+    char message[MAX_MSG_SIZE] = "Salons disponibles:\n";
+    
+    pthread_mutex_lock(&server->salons_mutex);
+    
+    if (server->nb_salons == 0) {
+        strcpy(message, "Aucun salon disponible. Utilisez @create <nom> pour créer un salon.");
+    } else {
+        for (int i = 0; i < server->nb_salons; i++) {
+            char line[256];
+            snprintf(line, sizeof(line), "- %s (%d membre(s)) [Créateur: %s]\n", 
+                     server->salons[i].nom, 
+                     server->salons[i].nb_membres,
+                     server->salons[i].createur);
+            
+            // Vérifier si l'ajout dépasserait la taille maximale
+            if (strlen(message) + strlen(line) < MAX_MSG_SIZE - 128) {
+                strcat(message, line);
+            } else {
+                strcat(message, "...(liste tronquée)\n");
+                break;
+            }
+        }
+        
+        // Ajouter récapitulatif
+        char summary[64];
+        snprintf(summary, sizeof(summary), "\nTotal: %d salon(s)\n", server->nb_salons);
+        strcat(message, summary);
+        
+        // Ajouter instruction
+        strcat(message, "Pour rejoindre un salon: @join <nom_salon>");
+    }
+    
+    pthread_mutex_unlock(&server->salons_mutex);
+    
+    init_request(&response, REQ_MESSAGE, "Server", "", message);
+    send_response(server, &response, client_addr);
     return CMD_SUCCESS;
 }

@@ -1,15 +1,25 @@
 === AIDE UTILISATEUR ===
 
-Commandes disponibles pour tous les utilisateurs :
+Commandes générales disponibles pour tous les utilisateurs :
 @help - Affiche cette aide
 @ping - Test de connectivité (le serveur répond "pong")
 @msg <utilisateur> <message> - Envoie un message privé à un utilisateur
 @credits - Affiche les crédits de l'application
 @list - Affiche la liste des utilisateurs connectés avec leur rôle
+@info - Affiche vos informations actuelles (salon, statut, rôle)
+@disconnect - Déconnecte explicitement du serveur
+
+Commandes de gestion des fichiers :
 @download <fichier> - Télécharge un fichier depuis le serveur
 @upload <fichier> - Envoie un fichier au serveur
-@uploads - Affiche la liste des fichiers disponibles sur le serveur
-@disconnect - Déconnecte explicitement du serveur
+@files - Affiche la liste des fichiers disponibles sur le serveur
+
+Commandes de gestion des salons :
+@rooms - Affiche la liste des salons disponibles
+@create <nom_salon> - Crée un nouveau salon
+@join <nom_salon> - Rejoint un salon existant
+@leave - Quitte le salon courant
+@delete <nom_salon> - Supprime un salon (créateur uniquement)
 
 Commandes pour les modérateurs :
 @mute <utilisateur> [minutes] - Rend muet un utilisateur pendant une durée spécifiée (10 minutes par défaut)
@@ -20,7 +30,8 @@ Commandes pour les administrateurs uniquement :
 @promote <utilisateur> - Promeut un utilisateur au rang de modérateur
 
 Navigation :
-- Tapez simplement votre message pour l'envoyer à tous les utilisateurs connectés
+- Une fois dans un salon, tapez simplement votre message pour l'envoyer à tous les membres du salon
+- Vous devez rejoindre un salon avec @join avant de pouvoir envoyer des messages
 - Utilisez Ctrl+C pour quitter l'application proprement
 
 Support :

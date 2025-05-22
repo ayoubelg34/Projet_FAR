@@ -26,7 +26,7 @@ void init_command_system(void);
 // Traitement d'une commande
 CommandResult process_command(Server *server, Request *req, struct sockaddr_in *client_addr);
 
-// Commandes spécifiques
+// Commandes générales
 CommandResult cmd_help(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_ping(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_msg(Server *server, Request *req, struct sockaddr_in *client_addr);
@@ -37,9 +37,17 @@ CommandResult cmd_download(Server *server, Request *req, struct sockaddr_in *cli
 CommandResult cmd_upload(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_promote(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_disconnect(Server *server, Request *req, struct sockaddr_in *client_addr);
-CommandResult cmd_uploads(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_files(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_mute(Server *server, Request *req, struct sockaddr_in *client_addr);
 CommandResult cmd_unmute(Server *server, Request *req, struct sockaddr_in *client_addr);
+
+// Commandes relatives aux salons
+CommandResult cmd_create(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_join(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_leave(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_delete(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_rooms(Server *server, Request *req, struct sockaddr_in *client_addr);
+CommandResult cmd_info(Server *server, Request *req, struct sockaddr_in *client_addr);
 
 // Utilitaires
 char* read_file_content(const char *filename);

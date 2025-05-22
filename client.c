@@ -97,6 +97,9 @@ int init_client(Client *client, const char *server_ip) {
         return -1;
     }
     
+    // Initialiser le salon courant comme vide
+    client->current_room[0] = '\0';
+    
     // Le gestionnaire de signal est déjà configuré dans common.c
     // Pas besoin de réinitialiser ici
     
@@ -446,12 +449,16 @@ void *send_message_thread(void *arg) {
     pthread_setspecific(client_key, client);
     
     char buffer[MAX_MSG_SIZE];
+    char prompt[100];
     Request req;
     
     // Boucle pour envoyer des messages
     while (running) {
+        // Obtenir le prompt personnalisé
+        get_custom_prompt(client, prompt, sizeof(prompt));
+        
         // Prompt utilisateur
-        printf("Vous: ");
+        printf("%s", prompt);
         fflush(stdout);
         
         // Lire l'entrée utilisateur
@@ -590,12 +597,61 @@ void *receive_message_thread(void *arg) {
                 perror("Erreur d'allocation mémoire");
             }
             
-            printf("Vous: ");
+            // Réafficher le prompt
+            char prompt[100];
+            get_custom_prompt(client, prompt, sizeof(prompt));
+            printf("%s", prompt);
             fflush(stdout);
         } else {
+            // Vérifier s'il s'agit d'une réponse à une commande de salon
+            if (response.type == REQ_MESSAGE && strcmp(response.sender, "Server") == 0) {
+                // Détecter les messages de confirmation de salon
+                if (strstr(response.content, "Vous avez rejoint le salon") != NULL) {
+                    // Extraire le nom du salon de la réponse
+                    char *start = strstr(response.content, "'");
+                    if (start) {
+                        start++; // Ignorer la première apostrophe
+                        char *end = strstr(start, "'");
+                        if (end) {
+                            char room_name[50];
+                            int len = end - start;
+                            if (len > 0 && len < 49) {
+                                strncpy(room_name, start, len);
+                                room_name[len] = '\0';
+                                update_current_room(client, room_name);
+                            }
+                        }
+                    }
+                } else if (strstr(response.content, "Vous avez quitté le salon") != NULL) {
+                    update_current_room(client, "");  // Salon vide
+                } else if (strstr(response.content, "créé avec succès") != NULL && 
+                          strstr(response.content, "Salon") != NULL) {
+                    // Extraire le nom du salon créé
+                    char *start = strstr(response.content, "'");
+                    if (start) {
+                        start++;
+                        char *end = strstr(start, "'");
+                        if (end) {
+                            char room_name[50];
+                            int len = end - start;
+                            if (len > 0 && len < 49) {
+                                strncpy(room_name, start, len);
+                                room_name[len] = '\0';
+                                // Le créateur rejoint automatiquement son salon
+                                update_current_room(client, room_name);
+                            }
+                        }
+                    }
+                }
+            }
+            
             // Traitement normal des messages
             printf("\r[%s] %s\n", response.sender, response.content);
-            printf("Vous: ");
+            
+            // Réafficher le prompt avec le salon courant
+            char prompt[100];
+            get_custom_prompt(client, prompt, sizeof(prompt));
+            printf("%s", prompt);
             fflush(stdout);
         }
 
@@ -609,6 +665,25 @@ void *receive_message_thread(void *arg) {
     
     printf("Thread de réception terminé.\n");
     return NULL;
+}
+
+// Fonction pour mettre à jour le salon courant
+void update_current_room(Client *client, const char *room_name) {
+    if (room_name == NULL || strlen(room_name) == 0) {
+        client->current_room[0] = '\0';  // Salon vide
+    } else {
+        strncpy(client->current_room, room_name, sizeof(client->current_room) - 1);
+        client->current_room[sizeof(client->current_room) - 1] = '\0';
+    }
+}
+
+// Fonction pour obtenir le prompt personnalisé
+void get_custom_prompt(Client *client, char *prompt, size_t size) {
+    if (strlen(client->current_room) > 0) {
+        snprintf(prompt, size, "[%s] %s: ", client->current_room, client->username);
+    } else {
+        snprintf(prompt, size, "[Hors salon] %s: ", client->username);
+    }
 }
 
 // Fonction principale

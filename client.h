@@ -10,6 +10,7 @@ typedef struct {
     struct sockaddr_in server_addr;
     char username[50];
     char password[50];
+    char current_room[50];  // Salon courant
 } Client;
 
 // Structure pour les arguments du thread de transfert de fichier
@@ -47,6 +48,12 @@ int receive_file(const char *save_dir, const char *server_ip);
 
 // Fonction pour recevoir un fichier via TCP avec un port spécifié
 int receive_file_with_port(const char *save_dir, const char *server_ip, int port);
+
+// Fonction pour mettre à jour le salon courant
+void update_current_room(Client *client, const char *room_name);
+
+// Fonction pour obtenir le prompt personnalisé
+void get_custom_prompt(Client *client, char *prompt, size_t size);
 
 // Clé pour stocker le pointeur client dans les threads
 extern pthread_key_t client_key;
