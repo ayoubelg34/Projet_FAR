@@ -1,4 +1,3 @@
-// Ajouter dans common.h
 #ifndef COMMON_H
 #define COMMON_H
 
@@ -15,6 +14,7 @@
 #include <libgen.h>  // For basename()
 #include <sys/stat.h> // For mkdir()
 #include <sys/time.h> // to use timeval structs
+#include <fcntl.h>  // For fcntl, F_SETFL, F_GETFL, O_NONBLOCK
 
 #define MAX_MSG_SIZE 1024
 #define SERVER_PORT 8888

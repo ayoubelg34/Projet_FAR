@@ -327,6 +327,15 @@ void *file_transfer_thread(void *arg) {
         return NULL;
     }
     
+    // Configurer un timeout pour que la socket ne bloque pas indéfiniment
+    struct timeval tv;
+    tv.tv_sec = 5;  // 5 secondes timeout
+    tv.tv_usec = 0;
+    if (setsockopt(server_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        perror("Erreur lors de la configuration du timeout");
+        // Non fatal, continuer
+    }
+    
     // Lier la socket à l'adresse
     if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("Erreur lors du bind TCP");
@@ -343,80 +352,167 @@ void *file_transfer_thread(void *arg) {
     
     printf("Serveur de fichiers TCP démarré sur le port %d\n", FILE_TRANSFER_PORT);
     
+    // Configuration du mode non-bloquant
+    fcntl(server_socket, F_SETFL, fcntl(server_socket, F_GETFL, 0) | O_NONBLOCK);
+    
     while (running) {
-        // Accepter une connexion
-        client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_len);
-        if (client_socket < 0) {
-            if (!running) break;
-            perror("Erreur lors de l'acceptation de la connexion");
-            continue;
-        }
+        // Vérifier périodiquement si le serveur doit s'arrêter
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(server_socket, &read_fds);
         
-        printf("Nouvelle connexion de fichier depuis %s:%d\n", 
-               inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        // Configurer un timeout court pour select
+        struct timeval select_timeout;
+        select_timeout.tv_sec = 1;
+        select_timeout.tv_usec = 0;
         
-        // Recevoir le nom du fichier
-        char filename[256];
-        ssize_t bytes_received = recv(client_socket, filename, sizeof(filename), 0);
+        // Utiliser select pour vérifier si des données sont disponibles
+        int ready = select(server_socket + 1, &read_fds, NULL, NULL, &select_timeout);
         
-        if (bytes_received <= 0) {
-            perror("Erreur lors de la réception du nom de fichier");
-            close(client_socket);
-            continue;
-        }
-        
-        // Créer le répertoire de stockage s'il n'existe pas
-        char upload_dir[256] = "./uploads";
-        mkdir(upload_dir, 0755);
-        
-        // Générer un nom unique si le fichier existe déjà
-        char unique_filename[256];
-        generate_unique_filename(upload_dir, filename, unique_filename, sizeof(unique_filename));
-        
-        // Construire le chemin complet du fichier
-        char filepath[512];
-        snprintf(filepath, sizeof(filepath), "%s/%s", upload_dir, unique_filename);
-        
-        // Si le nom a été modifié, informer l'utilisateur
-        if (strcmp(filename, unique_filename) != 0) {
-            printf("Le fichier existe déjà. Renommé en %s\n", unique_filename);
-        }
-        
-        // Envoyer un ACK au client
-        if (send(client_socket, "OK", 3, 0) < 0) {
-            perror("Erreur lors de l'envoi de l'ACK");
-            close(client_socket);
-            continue;
-        }
-        
-        // Ouvrir le fichier pour écriture
-        FILE *file = fopen(filepath, "wb");
-        if (file == NULL) {
-            perror("Erreur lors de la création du fichier");
-            close(client_socket);
-            continue;
-        }
-        
-        // Recevoir et enregistrer le contenu du fichier
-        ssize_t bytes_read;
-        while ((bytes_read = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
-            if (fwrite(buffer, 1, (size_t)bytes_read, file) != (size_t)bytes_read) {
-                perror("Erreur lors de l'écriture dans le fichier");
-                break;
+        if (ready < 0) {
+            if (errno == EINTR) {
+                // Interruption par un signal (comme SIGINT)
+                if (!running) break;
+                continue;
             }
+            perror("Erreur lors de select");
+            continue;
         }
         
-        // Fermer le fichier
-        fclose(file);
-        
-        if (bytes_read < 0) {
-            perror("Erreur lors de la réception du fichier");
-        } else {
-            printf("Fichier reçu et enregistré: %s\n", filepath);
+        // Si aucune activité, vérifier si le serveur doit s'arrêter
+        if (ready == 0) {
+            if (!running) break;
+            continue;
         }
         
-        // Fermer la socket client
-        close(client_socket);
+        // Accepter une connexion seulement si des données sont disponibles
+        if (FD_ISSET(server_socket, &read_fds)) {
+            client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_len);
+            if (client_socket < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // Aucune connexion disponible, continuer
+                    continue;
+                }
+                
+                if (!running) break;
+                
+                perror("Erreur lors de l'acceptation de la connexion");
+                continue;
+            }
+            
+            printf("Nouvelle connexion de fichier depuis %s:%d\n", 
+                   inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+            
+            // Configurer un timeout pour cette socket client aussi
+            if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+                perror("Erreur lors de la configuration du timeout client");
+                // Non fatal, continuer
+            }
+            
+            // Recevoir le nom du fichier
+            char filename[256];
+            ssize_t bytes_received = recv(client_socket, filename, sizeof(filename), 0);
+            
+            if (bytes_received <= 0) {
+                perror("Erreur lors de la réception du nom de fichier");
+                close(client_socket);
+                continue;
+            }
+            
+            // Créer le répertoire de stockage s'il n'existe pas
+            char upload_dir[256] = "./uploads";
+            mkdir(upload_dir, 0755);
+            
+            // Générer un nom unique si le fichier existe déjà
+            char unique_filename[256];
+            generate_unique_filename(upload_dir, filename, unique_filename, sizeof(unique_filename));
+            
+            // Construire le chemin complet du fichier
+            char filepath[512];
+            snprintf(filepath, sizeof(filepath), "%s/%s", upload_dir, unique_filename);
+            
+            // Si le nom a été modifié, informer l'utilisateur
+            if (strcmp(filename, unique_filename) != 0) {
+                printf("Le fichier existe déjà. Renommé en %s\n", unique_filename);
+            }
+            
+            // Envoyer un ACK au client
+            if (send(client_socket, "OK", 3, 0) < 0) {
+                perror("Erreur lors de l'envoi de l'ACK");
+                close(client_socket);
+                continue;
+            }
+            
+            // Ouvrir le fichier pour écriture
+            FILE *file = fopen(filepath, "wb");
+            if (file == NULL) {
+                perror("Erreur lors de la création du fichier");
+                close(client_socket);
+                continue;
+            }
+            
+            // Recevoir et enregistrer le contenu du fichier avec vérification régulière de running
+            ssize_t bytes_read;
+            fd_set recv_fds;
+            struct timeval recv_timeout;
+            
+            while (running) {
+                // Configurer select pour cette socket
+                FD_ZERO(&recv_fds);
+                FD_SET(client_socket, &recv_fds);
+                recv_timeout.tv_sec = 1; // Vérifier running toutes les secondes
+                recv_timeout.tv_usec = 0;
+                
+                int recv_ready = select(client_socket + 1, &recv_fds, NULL, NULL, &recv_timeout);
+                
+                if (recv_ready < 0) {
+                    if (errno == EINTR) {
+                        // Interruption par un signal
+                        if (!running) break;
+                        continue;
+                    }
+                    perror("Erreur select sur le client");
+                    break;
+                }
+                
+                // Timeout - vérifier si on doit continuer
+                if (recv_ready == 0) {
+                    if (!running) break;
+                    continue;
+                }
+                
+                // Données disponibles à lire
+                if (FD_ISSET(client_socket, &recv_fds)) {
+                    bytes_read = recv(client_socket, buffer, sizeof(buffer), 0);
+                    
+                    if (bytes_read <= 0) {
+                        // Fin de fichier ou erreur
+                        if (bytes_read < 0) {
+                            perror("Erreur lors de la réception du fichier");
+                        }
+                        break;
+                    }
+                    
+                    // Écrire les données dans le fichier
+                    if (fwrite(buffer, 1, (size_t)bytes_read, file) != (size_t)bytes_read) {
+                        perror("Erreur lors de l'écriture dans le fichier");
+                        break;
+                    }
+                }
+            }
+            
+            // Fermer le fichier
+            fclose(file);
+            
+            if (running) {
+                printf("Fichier reçu et enregistré: %s\n", filepath);
+            } else {
+                printf("Réception du fichier interrompue: %s\n", filepath);
+            }
+            
+            // Fermer la socket client
+            close(client_socket);
+        }
     }
     
     // Fermer la socket serveur
@@ -432,6 +528,11 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
     FILE *file;
     char buffer[1024];
     size_t bytes_read;
+    
+    // Verify if the server should still be running
+    if (!running) {
+        return -1;
+    }
     
     // Correct the path to point to bin/uploads
     char filepath[512];
@@ -463,6 +564,15 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
         close(tcp_socket);
         fclose(file);
         return -1;
+    }
+    
+    // Configurer un timeout sur la socket
+    struct timeval tv;
+    tv.tv_sec = 5;  // 5 secondes timeout
+    tv.tv_usec = 0;
+    if (setsockopt(tcp_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        perror("Erreur lors de la configuration du timeout");
+        // Non fatal, continuer
     }
     
     // Configurer l'adresse du serveur avec un port éphémère (0)
@@ -516,22 +626,70 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
         return -1;
     }
     
-    // Configurer un timeout pour accept pour ne pas bloquer indéfiniment
-    struct timeval tv;
-    tv.tv_sec = 30;  // 30 secondes timeout
-    tv.tv_usec = 0;
-    if (setsockopt(tcp_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-        perror("Erreur lors de la configuration du timeout");
+    // Configurer le mode non-bloquant pour la socket
+    fcntl(tcp_socket, F_SETFL, fcntl(tcp_socket, F_GETFL, 0) | O_NONBLOCK);
+    
+    // Attendre la connexion du client avec un délai limité
+    int client_socket = -1;
+    time_t start_time = time(NULL);
+    const int max_wait_time = 30; // 30 secondes max pour que le client se connecte
+    
+    while ((time(NULL) - start_time < max_wait_time) && running) {
+        // Vérifier si une connexion est disponible
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(tcp_socket, &read_fds);
+        
+        struct timeval select_timeout;
+        select_timeout.tv_sec = 1;  // Vérifier périodiquement si le serveur doit s'arrêter
+        select_timeout.tv_usec = 0;
+        
+        int ready = select(tcp_socket + 1, &read_fds, NULL, NULL, &select_timeout);
+        
+        if (ready < 0) {
+            if (errno == EINTR) {
+                // Interruption par un signal
+                if (!running) break;
+                continue;
+            }
+            perror("Erreur lors de select");
+            close(tcp_socket);
+            fclose(file);
+            return -1;
+        }
+        
+        // Aucune connexion disponible, continuer d'attendre
+        if (ready == 0) {
+            if (!running) break;
+            continue;
+        }
+        
+        // Une connexion est disponible
+        client_socket = accept(tcp_socket, (struct sockaddr*)client_addr, &server_len);
+        if (client_socket < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Aucune connexion disponible, continuer d'attendre
+                continue;
+            }
+            perror("Erreur lors de l'acceptation de la connexion");
+            close(tcp_socket);
+            fclose(file);
+            return -1;
+        }
+        
+        // Connexion établie, sortir de la boucle
+        break;
     }
     
-    // Accepter la connexion du client
-    socklen_t client_len = sizeof(*client_addr);
-    int client_socket = accept(tcp_socket, (struct sockaddr*)client_addr, &client_len);
-    
-    if (client_socket < 0) {
-        perror("Erreur lors de l'acceptation de la connexion");
+    // Vérifier si la connexion a été établie
+    if (client_socket < 0 || !running) {
         close(tcp_socket);
         fclose(file);
+        if (!running) {
+            printf("Envoi du fichier annulé: arrêt du serveur\n");
+        } else {
+            printf("Timeout lors de l'attente de la connexion du client\n");
+        }
         return -1;
     }
     
@@ -544,9 +702,25 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
         return -1;
     }
     
-    // Attendre l'ACK du client
-    char ack_buffer[10];
-    if (recv(client_socket, ack_buffer, sizeof(ack_buffer), 0) < 0) {
+    // Attendre l'ACK du client avec un timeout
+    char ack_buffer[10] = {0};
+    fd_set ack_fds;
+    FD_ZERO(&ack_fds);
+    FD_SET(client_socket, &ack_fds);
+    
+    struct timeval ack_timeout;
+    ack_timeout.tv_sec = 5;  // 5 secondes pour recevoir l'ACK
+    ack_timeout.tv_usec = 0;
+    
+    if (select(client_socket + 1, &ack_fds, NULL, NULL, &ack_timeout) <= 0 || !running) {
+        perror("Timeout lors de l'attente de l'ACK");
+        close(client_socket);
+        close(tcp_socket);
+        fclose(file);
+        return -1;
+    }
+    
+    if (recv(client_socket, ack_buffer, sizeof(ack_buffer), 0) <= 0) {
         perror("Erreur lors de la réception de l'ACK");
         close(client_socket);
         close(tcp_socket);
@@ -562,8 +736,36 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
         return -1;
     }
     
-    // Envoyer le contenu du fichier
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+    // Envoyer le contenu du fichier avec vérification périodique de running
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0 && running) {
+        fd_set write_fds;
+        FD_ZERO(&write_fds);
+        FD_SET(client_socket, &write_fds);
+        
+        struct timeval write_timeout;
+        write_timeout.tv_sec = 1;  // Vérifier running toutes les secondes
+        write_timeout.tv_usec = 0;
+        
+        // Attendre que la socket soit prête pour écrire
+        int write_ready = select(client_socket + 1, NULL, &write_fds, NULL, &write_timeout);
+        
+        if (write_ready < 0) {
+            if (errno == EINTR) {
+                // Interruption par un signal
+                if (!running) break;
+                continue;
+            }
+            perror("Erreur select lors de l'envoi");
+            break;
+        }
+        
+        // Timeout - vérifier si on doit continuer
+        if (write_ready == 0) {
+            if (!running) break;
+            continue;
+        }
+        
+        // Socket prête pour écrire
         if (send(client_socket, buffer, bytes_read, 0) < 0) {
             perror("Erreur lors de l'envoi du fichier");
             close(client_socket);
@@ -573,14 +775,18 @@ int send_file_to_client(const char *filename, struct sockaddr_in *client_addr) {
         }
     }
     
-    printf("Fichier envoyé avec succès à %s.\n", inet_ntoa(client_addr->sin_addr));
+    if (running) {
+        printf("Fichier envoyé avec succès à %s.\n", inet_ntoa(client_addr->sin_addr));
+    } else {
+        printf("Envoi du fichier interrompu: arrêt du serveur\n");
+    }
     
     // Fermer les sockets et le fichier
     close(client_socket);
     close(tcp_socket);
     fclose(file);
     
-    return 0;
+    return running ? 0 : -1; // Succès seulement si le serveur était toujours en cours d'exécution
 }
 
 // Thread pour l'envoi de fichier
