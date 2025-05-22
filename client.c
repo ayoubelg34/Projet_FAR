@@ -557,7 +557,9 @@ void *receive_message_thread(void *arg) {
         
         // Vérifier s'il s'agit d'une notification de fichier à télécharger
         if (response.type == REQ_COMMAND && strncmp(response.content, "@file_ready ", 12) == 0) {
-            printf("\rNotification: Fichier prêt à être téléchargé.\n");
+            // Effacer la ligne actuelle
+            printf("\r                                                                               \r");
+            printf("Notification: Fichier prêt à être téléchargé.\n");
             
             // Extraire le nom du fichier et le port à utiliser
             char filename[256];
@@ -645,8 +647,11 @@ void *receive_message_thread(void *arg) {
                 }
             }
             
+            // Effacer la ligne actuelle avant d'afficher un nouveau message
+            printf("\r                                                                               \r");
+            
             // Traitement normal des messages
-            printf("\r[%s] %s\n", response.sender, response.content);
+            printf("[%s] %s\n", response.sender, response.content);
             
             // Réafficher le prompt avec le salon courant
             char prompt[100];
