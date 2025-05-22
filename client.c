@@ -1,14 +1,43 @@
 // client.c
+#define _POSIX_C_SOURCE 200809L
 #include "client.h"
 #include <errno.h>
 #include <libgen.h>
 #include <sys/stat.h>
+#include <signal.h>
 
 // External variables defined in common.c
 extern volatile sig_atomic_t running;
 extern int global_socket_fd;
 
-// Signal handler is defined in common.c
+// Client-specific data for signal handler
+static Client *global_client = NULL;
+static int signal_pipe[2] = {-1, -1}; // Pipe for unblocking fgets()
+
+// Client-specific signal handler
+void client_sigint_handler(int sig) {
+    printf("\nInterruption reçue (signal %d). Déconnexion en cours...\n", sig);
+    
+    // Set running flag to 0
+    running = 0;
+    
+    // Send disconnect request if client is initialized
+    if (global_client != NULL) {
+        Request req;
+        init_request(&req, REQ_DISCONNECT, global_client->username, "", "Déconnexion (SIGINT)");
+        sendto(global_client->socket_fd, &req, sizeof(Request), 0,
+               (struct sockaddr*)&global_client->server_addr, 
+               sizeof(global_client->server_addr));
+    }
+    
+    // Write to signal pipe to unblock fgets
+    if (signal_pipe[1] >= 0) {
+        char c = 'X';
+        write(signal_pipe[1], &c, 1);
+    }
+    
+    // Let the main threads finish cleanly
+}
 
 // Déclaration de fonction pour la rendre explicite
 int send_file(const char *filename, const char *server_ip);
@@ -451,71 +480,119 @@ void *send_message_thread(void *arg) {
     char buffer[MAX_MSG_SIZE];
     char prompt[100];
     Request req;
+    int prompt_displayed = 0; // Flag to track if prompt is displayed
     
     // Boucle pour envoyer des messages
     while (running) {
-        // Obtenir le prompt personnalisé
-        get_custom_prompt(client, prompt, sizeof(prompt));
-        
-        // Prompt utilisateur
-        printf("%s", prompt);
-        fflush(stdout);
-        
-        // Lire l'entrée utilisateur
-        if (fgets(buffer, MAX_MSG_SIZE, stdin) == NULL) {
-            if (!running) {  // Si interruption causée par le signal
-                break;
-            }
-            continue;
-        }
-        
-        // Supprimer le caractère de nouvelle ligne
-        buffer[strcspn(buffer, "\n")] = '\0';
-        
-        // Vérifier si c'est une commande d'upload de fichier
-        if (strncmp(buffer, "@upload ", 8) == 0) {
-            // Extraire le nom du fichier
-            char *filename = buffer + 8;
+        // Only display prompt if it hasn't been displayed yet
+        if (!prompt_displayed) {
+            // Obtenir le prompt personnalisé
+            get_custom_prompt(client, prompt, sizeof(prompt));
             
-            // Lancer le thread de transfert de fichier
-            pthread_t file_thread;
-            FileTransferThreadArgs *args = malloc(sizeof(FileTransferThreadArgs));
-            if (args) {
-                strncpy(args->filename, filename, sizeof(args->filename) - 1);
-                args->filename[sizeof(args->filename) - 1] = '\0';
-                strncpy(args->server_ip, inet_ntoa(client->server_addr.sin_addr), sizeof(args->server_ip) - 1);
-                args->server_ip[sizeof(args->server_ip) - 1] = '\0';
-                args->port = FILE_TRANSFER_PORT;
-                args->is_upload = 1;
-                
-                printf("Préparation de l'envoi du fichier %s en arrière-plan...\n", filename);
-                
-                if (pthread_create(&file_thread, NULL, file_transfer_thread, args) != 0) {
-                    perror("Erreur lors de la création du thread de transfert de fichier");
-                    free(args);
-                } else {
-                    pthread_detach(file_thread);
-                }
-            } else {
-                perror("Erreur d'allocation mémoire");
+            // Prompt utilisateur
+            printf("%s", prompt);
+            fflush(stdout);
+            prompt_displayed = 1;
+        }
+        
+        // Préparation pour la sélection
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+        FD_SET(signal_pipe[0], &readfds);
+        
+        int max_fd = (STDIN_FILENO > signal_pipe[0]) ? STDIN_FILENO : signal_pipe[0];
+        
+        // Structure pour le timeout
+        struct timeval tv;
+        tv.tv_sec = 1;  // 1 seconde de timeout
+        tv.tv_usec = 0;
+        
+        // Attendre jusqu'à ce que l'entrée soit disponible ou interruption
+        int select_result = select(max_fd + 1, &readfds, NULL, NULL, &tv);
+        
+        if (select_result > 0) {
+            // Vérifier si l'interruption vient du signal pipe
+            if (FD_ISSET(signal_pipe[0], &readfds)) {
+                char c;
+                read(signal_pipe[0], &c, 1); // Lire le caractère pour vider le pipe
+                if (!running) break;
             }
+            
+            // Vérifier si l'entrée est disponible sur stdin
+            if (FD_ISSET(STDIN_FILENO, &readfds)) {
+                // Lire l'entrée utilisateur
+                if (fgets(buffer, MAX_MSG_SIZE, stdin) == NULL) {
+                    if (!running) {  // Si interruption causée par le signal
+                        break;
+                    }
+                    continue;
+                }
+                
+                // Reset prompt flag since we will need to display it again
+                prompt_displayed = 0;
+                
+                // Supprimer le caractère de nouvelle ligne
+                buffer[strcspn(buffer, "\n")] = '\0';
+                
+                // Vérifier si c'est une commande d'upload de fichier
+                if (strncmp(buffer, "@upload ", 8) == 0) {
+                    // Extraire le nom du fichier
+                    char *filename = buffer + 8;
+                    
+                    // Lancer le thread de transfert de fichier
+                    pthread_t file_thread;
+                    FileTransferThreadArgs *args = malloc(sizeof(FileTransferThreadArgs));
+                    if (args) {
+                        strncpy(args->filename, filename, sizeof(args->filename) - 1);
+                        args->filename[sizeof(args->filename) - 1] = '\0';
+                        strncpy(args->server_ip, inet_ntoa(client->server_addr.sin_addr), sizeof(args->server_ip) - 1);
+                        args->server_ip[sizeof(args->server_ip) - 1] = '\0';
+                        args->port = FILE_TRANSFER_PORT;
+                        args->is_upload = 1;
+                        
+                        printf("Préparation de l'envoi du fichier %s en arrière-plan...\n", filename);
+                        
+                        if (pthread_create(&file_thread, NULL, file_transfer_thread, args) != 0) {
+                            perror("Erreur lors de la création du thread de transfert de fichier");
+                            free(args);
+                        } else {
+                            pthread_detach(file_thread);
+                        }
+                    } else {
+                        perror("Erreur d'allocation mémoire");
+                    }
+                }
+                // Vérifier si c'est une commande de téléchargement de fichier
+                else if (strncmp(buffer, "@download ", 10) == 0) {
+                    // Envoyer la commande au serveur
+                    init_request(&req, REQ_COMMAND, client->username, "", buffer);
+                    send_request(client, &req);
+                }
+                // Autres commandes ou messages normaux
+                else if (buffer[0] == '@') {
+                    // C'est une commande
+                    init_request(&req, REQ_COMMAND, client->username, "", buffer);
+                    send_request(client, &req);
+                    
+                    if (strncmp(buffer, "@disconnect", 11) == 0) {
+                        running = 0;
+                    }
+                } else {
+                    // C'est un message normal
+                    init_request(&req, REQ_MESSAGE, client->username, "", buffer);
+                    send_request(client, &req);
+                }
+            }
+        } else if (select_result < 0 && errno != EINTR) {
+            // Erreur inattendue
+            perror("Erreur select");
+            if (!running) break;
         }
-        // Vérifier si c'est une commande de téléchargement de fichier
-        else if (strncmp(buffer, "@download ", 10) == 0) {
-            // Envoyer la commande au serveur
-            init_request(&req, REQ_COMMAND, client->username, "", buffer);
-            send_request(client, &req);
-        }
-        // Autres commandes ou messages normaux
-        else if (buffer[0] == '@') {
-            // C'est une commande
-            init_request(&req, REQ_COMMAND, client->username, "", buffer);
-            send_request(client, &req);
-        } else {
-            // C'est un message normal
-            init_request(&req, REQ_MESSAGE, client->username, "", buffer);
-            send_request(client, &req);
-        }
+        // No need to display prompt again in timeout case (select_result == 0)
+        
+        // Vérifier si le thread doit se terminer
+        if (!running) break;
     }
     
     // Envoyer un message de déconnexion avant de quitter
@@ -754,6 +831,26 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
     
+    // Set global client for signal handler
+    global_client = &client;
+    
+    // Install client-specific signal handler
+    struct sigaction sa;
+    sa.sa_handler = client_sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+    
+    // Create pipe for signal handling
+    if (pipe(signal_pipe) < 0) {
+        perror("Erreur lors de la création du pipe de signal");
+        return EXIT_FAILURE;
+    }
+    
+    // Set stdin to non-blocking to avoid being stuck in fgets
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+    
     // Attendre que les threads se terminent
     pthread_join(send_thread, NULL);
 
@@ -763,7 +860,7 @@ int main(int argc, char *argv[]) {
         send_request(&client, &req);
         
         // Attendre un peu pour laisser le temps au serveur de traiter la déconnexion
-        usleep(500000);  // 500ms
+        sleep(500000);  // 500ms
         
         // Arrêter le thread de réception
         running = 0;

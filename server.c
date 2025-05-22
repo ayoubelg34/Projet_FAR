@@ -2,6 +2,24 @@
 #include "command.h"
 #include "common.h"
 
+// External variables defined in common.c
+extern volatile sig_atomic_t running;
+extern int global_socket_fd;
+
+// Server-specific data for signal handler
+static Server *global_server = NULL;
+
+// Server-specific signal handler
+void server_sigint_handler(int sig) {
+    printf("\nInterruption reçue (signal %d). Arrêt du serveur en cours...\n", sig);
+    
+    // Set running flag to 0
+    running = 0;
+    
+    // Let main thread handle the shutdown procedures
+    // This will allow for client notification and proper cleanup
+}
+
 // Fonction pour envoyer une réponse à un client
 int send_response(Server *server, Request *res, struct sockaddr_in *client_addr) {
     ssize_t sent = sendto(server->socket_fd, res, sizeof(Request), 0,
@@ -93,7 +111,11 @@ int init_server(Server *server) {
         return -1;
     }
       // Configuration du gestionnaire de signal pour CTRL+C
-    signal(SIGINT, handle_sigint);
+    struct sigaction sa;
+    sa.sa_handler = server_sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
     
     // Initialiser le mutex pour les salons
     pthread_mutex_init(&server->salons_mutex, NULL);
