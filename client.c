@@ -177,6 +177,14 @@ int connect_to_server(Client *client, const char *username, const char *password
     
     if (strstr(response.content, "Connexion réussie") != NULL) {
         printf("[SERVER] %s\n", response.content);
+        
+        // AJOUT: Envoyer automatiquement la commande @info pour récupérer l'état actuel
+        init_request(&req, REQ_COMMAND, username, "", "@info");
+        send_request(client, &req);
+        
+        // Petit délai pour laisser le temps au serveur de répondre
+        usleep(100000); // 100ms
+        
         return 0;
     }
     
@@ -719,6 +727,34 @@ void *receive_message_thread(void *arg) {
                                 // Le créateur rejoint automatiquement son salon
                                 update_current_room(client, room_name);
                             }
+                        }
+                    }
+                } 
+                // AJOUT: Détecter les informations utilisateur (@info)
+                else if (strstr(response.content, "=== INFORMATIONS UTILISATEUR ===") != NULL) {
+                    // Chercher l'information sur le salon courant
+                    char *salon_line = strstr(response.content, "Salon courant: ");
+                    if (salon_line) {
+                        salon_line += 15; // Avancer après "Salon courant: "
+                        
+                        // Vérifier si le salon est "Aucun"
+                        if (strncmp(salon_line, "Aucun", 5) == 0) {
+                            // L'utilisateur n'est dans aucun salon
+                            update_current_room(client, "");
+                        } else {
+                            // Extraire le nom du salon
+                            char salon[50] = "";
+                            int i = 0;
+                            
+                            // Copier jusqu'à rencontrer un '\n' ou un '\0'
+                            while (salon_line[i] && salon_line[i] != '\n' && i < 49) {
+                                salon[i] = salon_line[i];
+                                i++;
+                            }
+                            salon[i] = '\0';
+                            
+                            // Mettre à jour le salon courant
+                            update_current_room(client, salon);
                         }
                     }
                 }
