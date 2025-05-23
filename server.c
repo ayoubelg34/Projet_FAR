@@ -1138,7 +1138,19 @@ int join_room(Server *server, const char *username, const char *room_name) {
     int idx = find_client_by_username(server, username);
     if (idx < 0) return -1;
 
-    remove_user(server, username, NULL);    pthread_mutex_lock(&server->salons_mutex);
+    // Vérifier si l'utilisateur est déjà dans ce salon
+    pthread_mutex_lock(&server->clients_mutex);
+    if (strcmp(server->clients[idx].salon_courant, room_name) == 0) {
+        // L'utilisateur est déjà dans ce salon, pas besoin de l'ajouter à nouveau
+        pthread_mutex_unlock(&server->clients_mutex);
+        return 0;
+    }
+    pthread_mutex_unlock(&server->clients_mutex);
+
+    // Retirer l'utilisateur de son salon actuel
+    remove_user(server, username, NULL);
+    
+    pthread_mutex_lock(&server->salons_mutex);
     int rid = find_room(server, room_name);
     if (rid < 0) {
         pthread_mutex_unlock(&server->salons_mutex);
@@ -1146,6 +1158,20 @@ int join_room(Server *server, const char *username, const char *room_name) {
     }
 
     Salon *room = &server->salons[rid];
+    
+    // Vérifier si l'utilisateur est déjà membre de ce salon
+    for (int i = 0; i < room->nb_membres; i++) {
+        if (strcmp(room->membres[i], username) == 0) {
+            // L'utilisateur est déjà membre, mettre à jour salon_courant et retourner
+            pthread_mutex_unlock(&server->salons_mutex);
+            
+            pthread_mutex_lock(&server->clients_mutex);
+            strncpy(server->clients[idx].salon_courant, room_name, MAX_NOM_SALON);
+            pthread_mutex_unlock(&server->clients_mutex);
+            
+            return 0;
+        }
+    }
     
     // Vérifier si le tableau des membres doit être redimensionné
     if (room->nb_membres >= room->membres_capacity) {
