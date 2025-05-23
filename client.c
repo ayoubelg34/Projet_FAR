@@ -768,7 +768,14 @@ void *receive_message_thread(void *arg) {
             printf("\r                                                                               \r");
             
             // Traitement normal des messages
-            printf("[%s] %s\n", response.sender, response.content);
+            // Si c'est un message du serveur, on garde le format actuel
+            if (strcmp(response.sender, "Server") == 0) {
+                printf("[%s] %s\n", response.sender, response.content);
+            } 
+            // Si c'est un message d'un utilisateur, on ajoute ": " après le nom d'utilisateur
+            else {
+                printf("[%s] %s: %s\n", client->current_room, response.sender, response.content);
+            }
             
             // Réafficher le prompt avec le salon courant
             char prompt[100];
