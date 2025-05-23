@@ -5,6 +5,7 @@
 #include <libgen.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <time.h>
 
 // External variables defined in common.c
 extern volatile sig_atomic_t running;
@@ -183,7 +184,10 @@ int connect_to_server(Client *client, const char *username, const char *password
         send_request(client, &req);
         
         // Petit délai pour laisser le temps au serveur de répondre
-        usleep(100000); // 100ms
+        struct timespec ts;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 100000000; // 100ms
+        nanosleep(&ts, NULL);
         
         return 0;
     }
